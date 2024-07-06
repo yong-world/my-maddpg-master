@@ -25,19 +25,24 @@ def make_update_exp(vals, target_vals):
     expression = tf.group(*expression)
     return U.function([], [], updates=[expression])
 
-def p_train(make_obs_ph_n, act_space_n, p_index, p_func, q_func, optimizer, grad_norm_clipping=None, local_q_func=False, num_units=64, scope="trainer", reuse=None):
+def p_train(make_obs_ph_n, act_space_n,# 所有agent的状态空间 一个个tensor，所有agent的动作空间（list）
+            p_index, p_func, q_func,#创建的actor 和 critic
+            optimizer, # 优化算法
+            grad_norm_clipping=None,# 梯度修剪
+            local_q_func=False, #默认是MADDPG，该True是DDPG
+            num_units=64,#隐藏层神经元数量
+            scope="trainer",#tensorflow的集合范围，就是用的默认
+            reuse=None):
     with tf.variable_scope(scope, reuse=reuse):
         # create distribtuions
-        act_pdtype_n = [make_pdtype(act_space) for act_space in act_space_n]
-
-        # set up placeholders
+        act_pdtype_n = [make_pdtype(act_space) for act_space in act_space_n]#根据每个agent动作空间选择带size参数分布类型对象，
+        # set up placeholders，构建placeholder，每个act_ph的形状是（None，pt.size）
         obs_ph_n = make_obs_ph_n
         act_ph_n = [act_pdtype_n[i].sample_placeholder([None], name="action"+str(i)) for i in range(len(act_space_n))]
-
         p_input = obs_ph_n[p_index]
 
         p = p_func(p_input, int(act_pdtype_n[p_index].param_shape()[0]), scope="p_func", num_units=num_units)
-        p_func_vars = U.scope_vars(U.absolute_scope_name("p_func"))
+        p_func_vars = U.scope_vars(U.absolute_scope_name("p_func"))#根据绝对命名路径获取范围内的
 
         # wrap parameters in distribution
         act_pd = act_pdtype_n[p_index].pdfromflat(p)

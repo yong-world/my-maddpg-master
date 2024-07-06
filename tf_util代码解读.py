@@ -192,7 +192,7 @@ def scope_vars(scope, trainable_only=False):
     """
     Get variables inside a scope
     The scope can be specified as a string
-
+    获取集合内的变量
     Parameters
     ----------
     scope: str or VariableScope
@@ -205,7 +205,7 @@ def scope_vars(scope, trainable_only=False):
     vars: [tf.Variable]
         list of variables in `scope`.
     """
-    return tf.get_collection(
+    return tf.get_collection(#在集合和命名范围的限定下获取变量
         tf.GraphKeys.TRAINABLE_VARIABLES if trainable_only else tf.GraphKeys.GLOBAL_VARIABLES,
         scope=scope if isinstance(scope, str) else scope.name
     )
