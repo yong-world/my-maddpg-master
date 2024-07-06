@@ -17,6 +17,7 @@ def discount_with_dones(rewards, dones, gamma):
         discounted.append(r)
     return discounted[::-1]
 
+
 def make_update_exp(vals, target_vals):
     polyak = 1.0 - 1e-2
     expression = []
@@ -25,45 +26,46 @@ def make_update_exp(vals, target_vals):
     expression = tf.group(*expression)
     return U.function([], [], updates=[expression])
 
-def p_train(make_obs_ph_n, act_space_n,# 所有agent的状态空间 一个个tensor，所有agent的动作空间（list）
-            p_index, p_func, q_func,#创建的actor 和 critic
-            optimizer, # 优化算法
-            grad_norm_clipping=None,# 梯度修剪
-            local_q_func=False, #默认是MADDPG，该True是DDPG
-            num_units=64,#隐藏层神经元数量
-            scope="trainer",#tensorflow的集合范围，就是用的默认
+    # 建立actor网络，构建训练的回调函数
+def p_train(make_obs_ph_n, act_space_n,  # 第一项是所有agent的观察构成的状态空间，是一个个tensor，第二项所有agent的动作空间（list）
+            p_index, p_func, q_func,  # 创建的actor 和 critic
+            optimizer,  # 优化算法
+            grad_norm_clipping=None,  # 梯度修剪
+            local_q_func=False,   # 默认是MADDPG，该True是DDPG
+            num_units=64,  # 隐藏层神经元数量
+            scope="trainer",  # tensorflow的集合范围，就是用的默认
             reuse=None):
     with tf.variable_scope(scope, reuse=reuse):
-        # create distribtuions
-        act_pdtype_n = [make_pdtype(act_space) for act_space in act_space_n]#根据每个agent动作空间选择带size参数分布类型对象，
-        # set up placeholders，构建placeholder，每个act_ph的形状是（None，pt.size）
+
+        # create distributions
+        act_pdtype_n = [make_pdtype(act_space) for act_space in act_space_n]  # 根据每个agent动作空间选择带size参数分布类型对象，
+
+        # set up placeholders，构建分布的占位符，每个act_ph的形状是（None，pt.size）
         obs_ph_n = make_obs_ph_n
         act_ph_n = [act_pdtype_n[i].sample_placeholder([None], name="action"+str(i)) for i in range(len(act_space_n))]
         p_input = obs_ph_n[p_index]
 
+        # p是actor的网络输出，比如正态分布的μ
         p = p_func(p_input, int(act_pdtype_n[p_index].param_shape()[0]), scope="p_func", num_units=num_units)
-        p_func_vars = U.scope_vars(U.absolute_scope_name("p_func"))#根据绝对命名路径获取范围内的
+        p_func_vars = U.scope_vars(U.absolute_scope_name("p_func"))  # 根据绝对命名路径获取范围内的变量
 
-        # wrap parameters in distribution
+        # wrap parameters in distribution。先根据pd类型构建具体分布，再将网络输出的分布参数装载到agent对应的分布对象里，然后采样
         act_pd = act_pdtype_n[p_index].pdfromflat(p)
-
         act_sample = act_pd.sample()
-        p_reg = tf.reduce_mean(tf.square(act_pd.flatparam()))
-        #计算动作的分布参数的正则化，reduce_mean求均值并降维为一个数
-        act_input_n = act_ph_n + []
-        #创建一个新列表，而不是浅拷贝
-        act_input_n[p_index] = act_pd.sample()
-        q_input = tf.concat(obs_ph_n + act_input_n, 1)
-        if local_q_func:
+        p_reg = tf.reduce_mean(tf.square(act_pd.flatparam()))  # 将分布的平方和，作为训练用的正则化项
+
+        act_input_n = act_ph_n + []  # 创建一个新列表，而不是浅拷贝，拷贝动作占位符
+        act_input_n[p_index] = act_pd.sample()  # *不是很理解为啥要对当前actor的动作进行采样？*:好像跟y的公式有关
+        q_input = tf.concat(obs_ph_n + act_input_n, 1)  # 将每个agent的观察和动作合并成n个观察动作对
+        if local_q_func:  # 如果是DDPG算法则q_input这么做
             q_input = tf.concat([obs_ph_n[p_index], act_input_n[p_index]], 1)
-        q = q_func(q_input, 1, scope="q_func", reuse=True, num_units=num_units)[:,0]
-        #[:,0]裁取所有行的第0列，实际上在这里因为输出维度是1，其实不需要这个操作
-        pg_loss = -tf.reduce_mean(q)
 
+        #计算Q值，构建损失值，计算梯度并裁剪
+        q = q_func(q_input, 1, scope="q_func", reuse=True, num_units=num_units)[:, 0]  # [:,0]裁取所有行的第0列，在这没意义
+        pg_loss = -tf.reduce_mean(q)  # 训练actor的时候不需要更新Q网络，所以不用哪些均方误差，只要往Q值增大大方向就行
         loss = pg_loss + p_reg * 1e-3
-
-        optimize_expr = U.minimize_and_clip(optimizer, loss, p_func_vars, grad_norm_clipping)
-        #使用L2正则化对网络梯度进行裁剪，限制在0.5
+        optimize_expr = U.minimize_and_clip(optimizer, loss, p_func_vars, grad_norm_clipping)  # 使用L2正则化对网络梯度裁剪
+        # 返回一个优化器的操作，<tf.Operation 'agent_0_1/Adam' type=NoOp>
 
         # Create callable functions
         train = U.function(inputs=obs_ph_n + act_ph_n, outputs=loss, updates=[optimize_expr])
@@ -80,9 +82,11 @@ def p_train(make_obs_ph_n, act_space_n,# 所有agent的状态空间 一个个ten
 
         return act, train, update_target_p, {'p_values': p_values, 'target_act': target_act}
 
-def q_train(make_obs_ph_n, act_space_n, q_index, q_func, optimizer, grad_norm_clipping=None, local_q_func=False, scope="trainer", reuse=None, num_units=64):
+
+def q_train(make_obs_ph_n, act_space_n, q_index, q_func, optimizer, grad_norm_clipping=None,
+            local_q_func=False, scope="trainer", reuse=None, num_units=64):
     with tf.variable_scope(scope, reuse=reuse):
-        # create distribtuions
+        # create distributions
         act_pdtype_n = [make_pdtype(act_space) for act_space in act_space_n]
 
         # set up placeholders

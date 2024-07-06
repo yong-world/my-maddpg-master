@@ -81,7 +81,7 @@ class BatchInput(PlacholderTfInput):
         name: str
             name of the underlying placeholder
         """
-        super().__init__(tf.placeholder(dtype, [None] + list(shape), name=name))
+        super().__init__(tf.placeholder(dtype, [None] + list(shape), name=name))#list(可迭代对象)返回一个列表形式的可迭代对象
 
 
 class Uint8Input(PlacholderTfInput):
