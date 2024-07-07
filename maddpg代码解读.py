@@ -31,7 +31,7 @@ def p_train(make_obs_ph_n, act_space_n,  # 第一项是所有agent的观察构�
             p_index, p_func, q_func,  # 创建的actor 和 critic
             optimizer,  # 优化算法
             grad_norm_clipping=None,  # 梯度修剪
-            local_q_func=False,   # 默认是MADDPG，该True是DDPG
+            local_q_func=False,   # 默认是MADDPG，当True时是DDPG
             num_units=64,  # 隐藏层神经元数量
             scope="trainer",  # tensorflow的集合范围，就是用的默认
             reuse=None):
@@ -45,7 +45,7 @@ def p_train(make_obs_ph_n, act_space_n,  # 第一项是所有agent的观察构�
         act_ph_n = [act_pdtype_n[i].sample_placeholder([None], name="action"+str(i)) for i in range(len(act_space_n))]
         p_input = obs_ph_n[p_index]
 
-        # p是actor的网络输出，比如正态分布的μ
+        # p是actor的网络输出，比如正态分布的μ和方差，p是个（act_dim行，act_pdtype.shape()列)的列表/数组，反正就是那个东西
         p = p_func(p_input, int(act_pdtype_n[p_index].param_shape()[0]), scope="p_func", num_units=num_units)
         p_func_vars = U.scope_vars(U.absolute_scope_name("p_func"))  # 根据绝对命名路径获取范围内的变量
 
@@ -129,7 +129,7 @@ class MADDPGAgentTrainer(AgentTrainer):
         self.args = args
         obs_ph_n = []
         for i in range(self.n):
-            obs_ph_n.append(U.BatchInput(obs_shape_n[i], name="observation"+str(i)).get())
+            obs_ph_n.append(U.BatchInput(obs_shape_n[i], name="observation"+str(i)).get())  # 构建一个(None,shape)的占位符
 
         # Create all the functions necessary to train the model
         self.q_train, self.q_update, self.q_debug = q_train(
