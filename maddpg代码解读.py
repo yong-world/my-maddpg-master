@@ -192,12 +192,12 @@ class MADDPGAgentTrainer(AgentTrainer):
         # train q network
         num_sample = 1
         target_q = 0.0
-        for i in range(num_sample):
+        for i in range(num_sample):  # 计算基本损失与算法公式一致
             target_act_next_n = [agents[i].p_debug['target_act'](obs_next_n[i]) for i in range(self.n)]
             target_q_next = self.q_debug['target_q_values'](*(obs_next_n + target_act_next_n))
             target_q += rew + self.args.gamma * (1.0 - done) * target_q_next
         target_q /= num_sample
-        q_loss = self.q_train(*(obs_n + act_n + [target_q]))
+        q_loss = self.q_train(*(obs_n + act_n + [target_q]))  # 目标Q值也就是公式里的y
 
         # train p network
         p_loss = self.p_train(*(obs_n + act_n))

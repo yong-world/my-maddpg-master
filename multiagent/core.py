@@ -32,7 +32,7 @@ class Entity(object):
         self.size = 0.050
         # entity can move / be pushed
         self.movable = False
-        # entity collides with others
+        # entity collides with others，是否可碰撞上其它agent
         self.collide = True
         # material density (affects mass)
         self.density = 25.0
@@ -43,7 +43,7 @@ class Entity(object):
         self.accel = None
         # state
         self.state = EntityState()
-        # mass
+        # mass质量
         self.initial_mass = 1.0
 
     @property
@@ -69,7 +69,7 @@ class Agent(Entity):
         self.u_noise = None
         # communication noise amount
         self.c_noise = None
-        # control range
+        # control action range
         self.u_range = 1.0
         # state
         self.state = AgentState()
@@ -119,7 +119,7 @@ class World(object):
         for agent in self.scripted_agents:
             agent.action = agent.action_callback(agent, self)
         # gather forces applied to entities
-        p_force = [None] * len(self.entities)
+        p_force = [None] * len(self.entities)  #例如[1]*5得到[1 1 1 1 1]
         # apply agent physical controls
         p_force = self.apply_action_force(p_force)
         # apply environment forces
@@ -130,7 +130,7 @@ class World(object):
         for agent in self.agents:
             self.update_agent_state(agent)
 
-    # gather agent action forces
+    # gather agent action forces 自身动作噪声
     def apply_action_force(self, p_force):
         # set applied forces
         for i,agent in enumerate(self.agents):
@@ -160,12 +160,11 @@ class World(object):
             if not entity.movable: continue
             entity.state.p_vel = entity.state.p_vel * (1 - self.damping)
             if (p_force[i] is not None):
-                entity.state.p_vel += (p_force[i] / entity.mass) * self.dt
+                entity.state.p_vel += (p_force[i] / entity.mass) * self.dt  # 新的速度等于当前速度加上加速度乘以时间步长
             if entity.max_speed is not None:
                 speed = np.sqrt(np.square(entity.state.p_vel[0]) + np.square(entity.state.p_vel[1]))
                 if speed > entity.max_speed:
-                    entity.state.p_vel = entity.state.p_vel / np.sqrt(np.square(entity.state.p_vel[0]) +
-                                                                  np.square(entity.state.p_vel[1])) * entity.max_speed
+                    entity.state.p_vel = entity.state.p_vel / np.sqrt(np.square(entity.state.p_vel[0]) +np.square(entity.state.p_vel[1])) * entity.max_speed  # 等比缩小
             entity.state.p_pos += entity.state.p_vel * self.dt
 
     def update_agent_state(self, agent):
@@ -177,7 +176,7 @@ class World(object):
             agent.state.c = agent.action.c + noise      
 
     # get collision forces for any contact between two entities
-    def get_collision_force(self, entity_a, entity_b):
+    def get_collision_force(self, entity_a, entity_b):  # 软碰撞
         if (not entity_a.collide) or (not entity_b.collide):
             return [None, None] # not a collider
         if (entity_a is entity_b):
@@ -189,8 +188,8 @@ class World(object):
         dist_min = entity_a.size + entity_b.size
         # softmax penetration
         k = self.contact_margin
-        penetration = np.logaddexp(0, -(dist - dist_min)/k)*k
-        force = self.contact_force * delta_pos / dist * penetration
+        penetration = np.logaddexp(0, -(dist - dist_min)/k)*k  # 平滑函数，碰撞前接近于0，在碰撞后接近于参数第二项
+        force = self.contact_force * delta_pos / dist * penetration  # delta_pos / dist计算方向的单位向量
         force_a = +force if entity_a.movable else None
         force_b = -force if entity_b.movable else None
         return [force_a, force_b]

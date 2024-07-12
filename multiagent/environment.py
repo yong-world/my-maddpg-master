@@ -4,7 +4,7 @@ from gym.envs.registration import EnvSpec
 import numpy as np
 from multiagent.multi_discrete import MultiDiscrete
 
-# environment for all agents in the multiagent world
+# environment for all agents in the multi-agent world
 # currently code assumes that no agents will be created/destroyed at runtime!
 class MultiAgentEnv(gym.Env):
     metadata = {
@@ -26,10 +26,11 @@ class MultiAgentEnv(gym.Env):
         self.info_callback = info_callback
         self.done_callback = done_callback
         # environment parameters
-        self.discrete_action_space = True
+        self.discrete_action_space = True   # TODO 动作空间为何默认是离散，而且没有修改
         # if true, action is a number 0...N, otherwise action is a one-hot N-dimensional vector
         self.discrete_action_input = False
         # if true, even the action is continuous, action will be performed discretely
+        # 判断是否有参数离散动作，但是我看没有哪个其它文件里有discrete_action这个东西
         self.force_discrete_action = world.discrete_action if hasattr(world, 'discrete_action') else False
         # if true, every agent has the same reward
         self.shared_reward = world.collaborative if hasattr(world, 'collaborative') else False
@@ -39,6 +40,7 @@ class MultiAgentEnv(gym.Env):
         self.action_space = []
         self.observation_space = []
         for agent in self.agents:
+            # 计算每个agent的物理动作空间和通信动作空间，然后由MultiDiscrete或者Tuple合成一个来管理，采样时，返回都是一个列表
             total_action_space = []
             # physical action space
             if self.discrete_action_space:
@@ -49,7 +51,7 @@ class MultiAgentEnv(gym.Env):
                 total_action_space.append(u_action_space)
             # communication action space
             if self.discrete_action_space:
-                c_action_space = spaces.Discrete(world.dim_c)
+                c_action_space = spaces.Discrete(world.dim_c)  # swc中是4
             else:
                 c_action_space = spaces.Box(low=0.0, high=1.0, shape=(world.dim_c,), dtype=np.float32)
             if not agent.silent:
@@ -60,12 +62,14 @@ class MultiAgentEnv(gym.Env):
                 if all([isinstance(act_space, spaces.Discrete) for act_space in total_action_space]):
                     act_space = MultiDiscrete([[0, act_space.n - 1] for act_space in total_action_space])
                 else:
+                    # 如果不全是离散的以列表数组的形式
                     act_space = spaces.Tuple(total_action_space)
                 self.action_space.append(act_space)
             else:
                 self.action_space.append(total_action_space[0])
             # observation space
-            obs_dim = len(observation_callback(agent, self.world))
+            look_at_obs_return=observation_callback(agent, self.world)
+            obs_dim = len(look_at_obs_return)
             self.observation_space.append(spaces.Box(low=-np.inf, high=+np.inf, shape=(obs_dim,), dtype=np.float32))
             agent.action.c = np.zeros(self.world.dim_c)
 

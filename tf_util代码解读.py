@@ -3,23 +3,40 @@ import numpy as np
 import os
 import tensorflow as tf
 
+
 def sum(x, axis=None, keepdims=False):
     return tf.reduce_sum(x, axis=None if axis is None else [axis], keep_dims = keepdims)
+
+
 def mean(x, axis=None, keepdims=False):
     return tf.reduce_mean(x, axis=None if axis is None else [axis], keep_dims = keepdims)
+
+
 def var(x, axis=None, keepdims=False):
     meanx = mean(x, axis=axis, keepdims=keepdims)
     return mean(tf.square(x - meanx), axis=axis, keepdims=keepdims)
+
+
 def std(x, axis=None, keepdims=False):
     return tf.sqrt(var(x, axis=axis, keepdims=keepdims))
+
+
 def max(x, axis=None, keepdims=False):
     return tf.reduce_max(x, axis=None if axis is None else [axis], keep_dims = keepdims)
+
+
 def min(x, axis=None, keepdims=False):
     return tf.reduce_min(x, axis=None if axis is None else [axis], keep_dims = keepdims)
+
+
 def concatenate(arrs, axis=0):
     return tf.concat(axis=axis, values=arrs)
+
+
 def argmax(x, axis=None):
     return tf.argmax(x, axis=axis)
+
+
 def softmax(x, axis=None):
     return tf.nn.softmax(x, axis=axis)
 
@@ -148,7 +165,7 @@ def minimize_and_clip(optimizer, objective, var_list, clip_val=10):
             if grad is not None:
                 gradients[i] = (tf.clip_by_norm(grad, clip_val), var)
         #clip_by_norm，计算L2范数（平方和再开方），避免出现梯度爆炸
-        return optimizer.apply_gradients(gradients)
+        return optimizer.apply_gradients(gradients)# 返回一个应用梯度的操作
 
 
 # ================================================================
@@ -289,12 +306,12 @@ def function(inputs, outputs, updates=None, givens=None):
 
 class _Function(object):
     def __init__(self, inputs, outputs, updates, givens, check_nan=False):
-        #先判断是否是占位符，是不是因为现在是在构成回调函数过程，所以不能是实际数据，只能是占位符
+        # 先判断是否是占位符，现在是在构成回调函数过程，输入只能是占位符，只有调用这个类对象函数时输入的位置参数和关键字参数
         for inpt in inputs:
             if not issubclass(type(inpt), TfInput):
-                #inpt是否是TfInput的子类，而TfInput是后继用于操作占位符的类的基础抽象类。即是否是高级接口的占位符
+                # inpt是否是TfInput的子类，而TfInput用于操作占位符的类的基础抽象类。
                 assert len(inpt.op.inputs) == 0, "inputs should all be placeholders of rl_algs.common.TfInput"
-                #inpt.op.inputs 表示 inpt 对应操作的输入节点列表，确保操作的输入节点数量为0，即操作没有依赖的输入节点。当不是高级接口占位符时tf的占位符
+                # inpt.op.inputs 表示 inpt 对应操作的输入节点列表，确保操作的输入节点数量为0，即操作没有依赖的输入节点。
         self.inputs = inputs
         updates = updates or []
         self.update_group = tf.group(*updates)
