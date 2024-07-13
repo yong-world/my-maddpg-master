@@ -142,7 +142,7 @@ class World(object):
     # gather physical forces acting on entities
     def apply_environment_force(self, p_force):
         # simple (but inefficient) collision response
-        for a,entity_a in enumerate(self.entities):
+        for a,entity_a in enumerate(self.entities):  # 我碰你，你碰我
             for b,entity_b in enumerate(self.entities):
                 if(b <= a): continue
                 [f_a, f_b] = self.get_collision_force(entity_a, entity_b)

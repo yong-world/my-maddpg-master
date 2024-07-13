@@ -71,7 +71,7 @@ class MultiAgentEnv(gym.Env):
             look_at_obs_return=observation_callback(agent, self.world)
             obs_dim = len(look_at_obs_return)
             self.observation_space.append(spaces.Box(low=-np.inf, high=+np.inf, shape=(obs_dim,), dtype=np.float32))
-            agent.action.c = np.zeros(self.world.dim_c)
+            agent.action.c = np.zeros(self.world.dim_c) # 多余的，在场景那已经初始化
 
         # rendering
         self.shared_viewer = shared_viewer
@@ -96,9 +96,9 @@ class MultiAgentEnv(gym.Env):
         for agent in self.agents:
             obs_n.append(self._get_obs(agent))
             reward_n.append(self._get_reward(agent))
-            done_n.append(self._get_done(agent))
+            done_n.append(self._get_done(agent))  # 无回调函数时则False
 
-            info_n['n'].append(self._get_info(agent))
+            info_n['n'].append(self._get_info(agent))  # 无时回空{}
 
         # all agents get total reward in cooperative case
         reward = np.sum(reward_n)
@@ -107,7 +107,7 @@ class MultiAgentEnv(gym.Env):
 
         return obs_n, reward_n, done_n, info_n
 
-    def reset(self):
+    def reset(self):  # 返回观察
         # reset world
         self.reset_callback(self.world)
         # reset renderer
@@ -149,7 +149,7 @@ class MultiAgentEnv(gym.Env):
         agent.action.u = np.zeros(self.world.dim_p)
         agent.action.c = np.zeros(self.world.dim_c)
         # process action
-        if isinstance(action_space, MultiDiscrete):
+        if isinstance(action_space, MultiDiscrete):  # leader的动作数组的拆分成两个具体动作
             act = []
             size = action_space.high - action_space.low + 1
             index = 0
@@ -174,12 +174,12 @@ class MultiAgentEnv(gym.Env):
                     d = np.argmax(action[0])
                     action[0][:] = 0.0
                     action[0][d] = 1.0
-                if self.discrete_action_space:
+                if self.discrete_action_space: # 动作输入
                     agent.action.u[0] += action[0][1] - action[0][2]
                     agent.action.u[1] += action[0][3] - action[0][4]
                 else:
                     agent.action.u = action[0]
-            sensitivity = 5.0
+            sensitivity = 5.0   # TODO sensitivity是什么？
             if agent.accel is not None:
                 sensitivity = agent.accel
             agent.action.u *= sensitivity

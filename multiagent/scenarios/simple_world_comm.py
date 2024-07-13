@@ -24,7 +24,7 @@ class Scenario(BaseScenario):
             agent.silent = True if i > 0 else False
             agent.adversary = True if i < num_adversaries else False
             agent.size = 0.075 if agent.adversary else 0.045
-            agent.accel = 3.0 if agent.adversary else 4.0  # 加速？
+            agent.accel = 3.0 if agent.adversary else 4.0  # 加速度
             #agent.accel = 20.0 if agent.adversary else 25.0
             agent.max_speed = 1.0 if agent.adversary else 1.3
         # add landmarks
@@ -84,7 +84,7 @@ class Scenario(BaseScenario):
 
         return boundary_list
 
-    def reset_world(self, world):   # 颜色和随机参数的初始化
+    def reset_world(self, world):   # 地标和agents的颜色和随机参数的初始化
         # random properties for agents
         for i, agent in enumerate(world.agents):
             agent.color = np.array([0.45, 0.95, 0.45]) if not agent.adversary else np.array([0.95, 0.45, 0.45])
