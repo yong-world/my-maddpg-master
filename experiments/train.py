@@ -95,14 +95,14 @@ def train(arglist):
         env = make_env(arglist.scenario, arglist, arglist.benchmark)
         # Create agent trainers
         obs_shape_n = [env.observation_space[i].shape for i in range(env.n)]
-        num_adversaries = min(env.n, arglist.num_adversaries)
+        num_adversaries = min(env.n, arglist.num_adversaries)  # num_adversaries跟local_q_func一起好agent算法的个数
         trainers = get_trainers(env, num_adversaries, obs_shape_n, arglist)
         print('Using good policy {} and adv policy {}'.format(arglist.good_policy, arglist.adv_policy))
 
-        # Initialize
+        # Initialize tensorflow变量初始化
         U.initialize()
 
-        # Load previous results, if necessary
+        # Load previous results, if necessary 加载先前的结果
         if arglist.load_dir == "":
             arglist.load_dir = arglist.save_dir
         if arglist.display or arglist.restore or arglist.benchmark:
@@ -110,25 +110,25 @@ def train(arglist):
             U.load_state(arglist.load_dir)
 
         episode_rewards = [0.0]  # sum of rewards for all agents
-        agent_rewards = [[0.0] for _ in range(env.n)]  # individual agent reward
+        agent_rewards = [[0.0] for _ in range(env.n)]  # individual agent reward双层列表
         final_ep_rewards = []  # sum of rewards for training curve
         final_ep_ag_rewards = []  # agent rewards for training curve
         agent_info = [[[]]]  # placeholder for benchmarking info
         saver = tf.train.Saver()
-        obs_n = env.reset()
-        episode_step = 0
-        train_step = 0
+        obs_n = env.reset()  # reset只返回观察
+        episode_step = 0  # 训练轮数
+        train_step = 0  # 训练步数
         t_start = time.time()
 
         print('Starting iterations...')
         while True:
-            # get action
+            # get action，调用u.function函数，返回具体的动作值（力）
             action_n = [agent.action(obs) for agent, obs in zip(trainers, obs_n)]
             # environment step
             new_obs_n, rew_n, done_n, info_n = env.step(action_n)
             episode_step += 1
             done = all(done_n)
-            terminal = (episode_step >= arglist.max_episode_len)
+            terminal = (episode_step >= arglist.max_episode_len)  # 为什么不是num-episodes的，arglist.max_episode_len只有25
             # collect experience
             for i, agent in enumerate(trainers):
                 agent.experience(obs_n[i], action_n[i], rew_n[i], new_obs_n[i], done_n[i], terminal)

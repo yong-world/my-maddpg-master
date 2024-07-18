@@ -36,7 +36,7 @@ class ReplayBuffer(object):
         for i in idxes:
             data = self._storage[i]
             obs_t, action, reward, obs_tp1, done = data
-            obses_t.append(np.array(obs_t, copy=False))
+            obses_t.append(np.array(obs_t, copy=False))  # 不用深拷贝而是引用来加快速度节省资源
             actions.append(np.array(action, copy=False))
             rewards.append(reward)
             obses_tp1.append(np.array(obs_tp1, copy=False))
@@ -44,9 +44,9 @@ class ReplayBuffer(object):
         return np.array(obses_t), np.array(actions), np.array(rewards), np.array(obses_tp1), np.array(dones)
 
     def make_index(self, batch_size):
-        return [random.randint(0, len(self._storage) - 1) for _ in range(batch_size)]
+        return [random.randint(0, len(self._storage) - 1) for _ in range(batch_size)]  # 因为左闭右开，减1的话其实是少了最后一个的抽取可能
 
-    def make_latest_index(self, batch_size):
+    def make_latest_index(self, batch_size):  # 返回最近添加的batch_size数量的经验的索引
         idx = [(self._next_idx - 1 - i) % self._maxsize for i in range(batch_size)]
         np.random.shuffle(idx)
         return idx
