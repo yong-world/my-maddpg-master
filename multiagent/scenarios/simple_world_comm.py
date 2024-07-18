@@ -100,7 +100,7 @@ class Scenario(BaseScenario):
         for agent in world.agents:
             agent.state.p_pos = np.random.uniform(-1, +1, world.dim_p)
             agent.state.p_vel = np.zeros(world.dim_p)
-            agent.state.c = np.zeros(world.dim_c)
+            agent.state.c = np.zeros(world.dim_c)  # state.c初始化
         for i, landmark in enumerate(world.landmarks):
             landmark.state.p_pos = np.random.uniform(-0.9, +0.9, world.dim_p)
             landmark.state.p_vel = np.zeros(world.dim_p)
@@ -234,7 +234,7 @@ class Scenario(BaseScenario):
         in_forest = [np.array([-1]), np.array([-1])]
         inf1 = False
         inf2 = False
-        if self.is_collision(agent, world.forests[0]):  # TODO 要改成遍历森林
+        if self.is_collision(agent, world.forests[0]):  # TODO 可以改成遍历森林
             in_forest[0] = np.array([1])
             inf1= True
         if self.is_collision(agent, world.forests[1]):
@@ -283,13 +283,15 @@ class Scenario(BaseScenario):
                 prey_forest_lead.append(np.array([-1]))
 
         comm = [world.agents[0].state.c]    # TODO 覆盖了？只有leader的消息了
-
+        # other_vel在代码里是专门指good_agent的速度
+        # agent.state.p_vel自身速度2，agent.state.p_pos自身位置2，entity_pos地标位置（高山、森林、资源点）5*2，
+        # other_pos其它智能体位置5*2，other_vel好智能体速度(good)2或者(adversary)2*2，in_forest自身是否在森林里2,comm通信信息4
         if agent.adversary and not agent.leader:
-            return np.concatenate([agent.state.p_vel] + [agent.state.p_pos] + entity_pos + other_pos + other_vel + in_forest + comm)
+            return np.concatenate([agent.state.p_vel] + [agent.state.p_pos] + entity_pos + other_pos + other_vel + in_forest + comm)  # 34
         if agent.leader:
             return np.concatenate(
-                [agent.state.p_vel] + [agent.state.p_pos] + entity_pos + other_pos + other_vel + in_forest + comm)
+                [agent.state.p_vel] + [agent.state.p_pos] + entity_pos + other_pos + other_vel + in_forest + comm)  # 34
         else:
-            return np.concatenate([agent.state.p_vel] + [agent.state.p_pos] + entity_pos + other_pos + in_forest + other_vel)
+            return np.concatenate([agent.state.p_vel] + [agent.state.p_pos] + entity_pos + other_pos + in_forest + other_vel)  # 28
 
 

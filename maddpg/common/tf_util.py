@@ -304,6 +304,7 @@ class _Function(object):
             feed_dict[inpt] = value
 
     def __call__(self, *args, **kwargs):
+        # 加载位置参数和关键字参数输入，获取计算题的输出
         assert len(args) <= len(self.inputs), "Too many arguments provided"
         feed_dict = {}
         # Update the args

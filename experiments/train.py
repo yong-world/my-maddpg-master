@@ -15,7 +15,7 @@ def parse_args():
     parser.add_argument("--scenario", type=str, default="simple_world_comm", help="name of the scenario script")
     parser.add_argument("--max-episode-len", type=int, default=25, help="maximum episode length")
     # parser.add_argument("--num-episodes", type=int, default=60000, help="number of episodes")
-    parser.add_argument("--num-episodes", type=int, default=600, help="number of episodes")
+    parser.add_argument("--num-episodes", type=int, default=2000, help="number of episodes")
     parser.add_argument("--num-adversaries", type=int, default=0, help="number of adversaries")
     parser.add_argument("--good-policy", type=str, default="maddpg", help="policy for good agents")
     parser.add_argument("--adv-policy", type=str, default="maddpg", help="policy of adversaries")
@@ -95,40 +95,40 @@ def train(arglist):
         env = make_env(arglist.scenario, arglist, arglist.benchmark)
         # Create agent trainers
         obs_shape_n = [env.observation_space[i].shape for i in range(env.n)]
-        num_adversaries = min(env.n, arglist.num_adversaries)  # num_adversaries跟local_q_func一起好agent算法的个数
+        num_adversaries = min(env.n, arglist.num_adversaries)
         trainers = get_trainers(env, num_adversaries, obs_shape_n, arglist)
         print('Using good policy {} and adv policy {}'.format(arglist.good_policy, arglist.adv_policy))
 
-        # Initialize tensorflow变量初始化
+        # Initialize 所有变量
         U.initialize()
 
-        # Load previous results, if necessary 加载先前的结果
+        # Load previous results, if necessary
         if arglist.load_dir == "":
             arglist.load_dir = arglist.save_dir
-        if arglist.display or arglist.restore or arglist.benchmark:
+        if arglist.display or arglist.restore or arglist.benchmark:  # 用tf.nn.train恢复模型变量
             print('Loading previous state...')
             U.load_state(arglist.load_dir)
 
         episode_rewards = [0.0]  # sum of rewards for all agents
-        agent_rewards = [[0.0] for _ in range(env.n)]  # individual agent reward双层列表
+        agent_rewards = [[0.0] for _ in range(env.n)]  # individual agent reward
         final_ep_rewards = []  # sum of rewards for training curve
         final_ep_ag_rewards = []  # agent rewards for training curve
         agent_info = [[[]]]  # placeholder for benchmarking info
         saver = tf.train.Saver()
-        obs_n = env.reset()  # reset只返回观察
-        episode_step = 0  # 训练轮数
-        train_step = 0  # 训练步数
+        obs_n = env.reset()
+        episode_step = 0
+        train_step = 0
         t_start = time.time()
 
         print('Starting iterations...')
         while True:
-            # get action，调用u.function函数，返回具体的动作值（力）
+            # get action
             action_n = [agent.action(obs) for agent, obs in zip(trainers, obs_n)]
             # environment step
             new_obs_n, rew_n, done_n, info_n = env.step(action_n)
             episode_step += 1
             done = all(done_n)
-            terminal = (episode_step >= arglist.max_episode_len)  # 为什么不是num-episodes的，arglist.max_episode_len只有25
+            terminal = (episode_step >= arglist.max_episode_len)
             # collect experience
             for i, agent in enumerate(trainers):
                 agent.experience(obs_n[i], action_n[i], rew_n[i], new_obs_n[i], done_n[i], terminal)
@@ -149,7 +149,7 @@ def train(arglist):
             # increment global step counter
             train_step += 1
 
-            # for benchmarking learned policies
+            # for benchmarking learned policies info_n返回值都是，是否发生碰撞
             if arglist.benchmark:
                 for i, info in enumerate(info_n):
                     agent_info[-1][i].append(info_n['n'])
@@ -170,7 +170,7 @@ def train(arglist):
             # update all trainers, if not in display or benchmark mode
             loss = None
             for agent in trainers:
-                agent.preupdate()
+                agent.preupdate()  # 清空采样索引
             for agent in trainers:
                 loss = agent.update(trainers, train_step)
 

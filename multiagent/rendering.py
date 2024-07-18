@@ -55,13 +55,14 @@ class Viewer(object):
         self.onetime_geoms = []
         self.transform = Transform()
 
-        glEnable(GL_BLEND)
+        glEnable(GL_BLEND)  # 色彩混合模式
         # glEnable(GL_MULTISAMPLE)
-        glEnable(GL_LINE_SMOOTH)
+        glEnable(GL_LINE_SMOOTH)  # 过虑线段的锯齿
         # glHint(GL_LINE_SMOOTH_HINT, GL_DONT_CARE)
-        glHint(GL_LINE_SMOOTH_HINT, GL_NICEST)
+        glHint(GL_LINE_SMOOTH_HINT, GL_NICEST)  # 指示抗锯齿线的采样质量，第二个应选择最正确或最高质量的选项。
         glLineWidth(2.0)
-        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)  # OpenGL会把源颜色和目标颜色各自取出，
+        # 并乘以一个系数（源颜色乘以的系数称为“源因子”，目标颜色乘以的系数称为“目标因子”），然后相加，这样就得到了新的颜色
 
     def close(self):
         self.window.close()
