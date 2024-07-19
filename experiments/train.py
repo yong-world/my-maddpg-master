@@ -16,7 +16,8 @@ def parse_args():
     parser.add_argument("--max-episode-len", type=int, default=25, help="maximum episode length")
     # parser.add_argument("--num-episodes", type=int, default=60000, help="number of episodes")
     parser.add_argument("--num-episodes", type=int, default=2000, help="number of episodes")
-    parser.add_argument("--num-adversaries", type=int, default=0, help="number of adversaries")
+    parser.add_argument("--num-adversaries", type=int, default=0, help="number of adversaries")  # 只有需要
+    # 指定为DDPG算法时才需要确定这个
     parser.add_argument("--good-policy", type=str, default="maddpg", help="policy for good agents")
     parser.add_argument("--adv-policy", type=str, default="maddpg", help="policy of adversaries")
     # Core training parameters
@@ -90,7 +91,7 @@ def get_trainers(env, num_adversaries, obs_shape_n, arglist):
 
 
 def train(arglist):
-    with U.single_threaded_session():  # 单cpu运行session
+    with U.single_threaded_session():  # 单进程运行session
         # Create environment
         env = make_env(arglist.scenario, arglist, arglist.benchmark)
         # Create agent trainers
@@ -171,11 +172,11 @@ def train(arglist):
             loss = None
             for agent in trainers:
                 agent.preupdate()  # 清空采样索引
-            for agent in trainers:
+            for agent in trainers:  # 大于最大经验池时才更新，且每一百训练步更新一次
                 loss = agent.update(trainers, train_step)
 
-            # save model, display training output
-            if terminal and (len(episode_rewards) % arglist.save_rate == 0):
+            # save model, display training output，保存所有tf变量，输出训练信息，保存最后save_rate轮的总奖励和agent奖励
+            if terminal and (len(episode_rewards) % arglist.save_rate == 0):  # 如果一轮结束且是保存轮
                 U.save_state(arglist.save_dir, saver=saver)
                 # print statement depends on whether there are adversaries
                 if num_adversaries == 0:
@@ -187,12 +188,12 @@ def train(arglist):
                         train_step, len(episode_rewards), np.mean(episode_rewards[-arglist.save_rate:]),
                         [np.mean(rew[-arglist.save_rate:]) for rew in agent_rewards], round(time.time()-t_start, 3)))
                 t_start = time.time()
-                # Keep track of final episode reward
+                # Keep track of final episode reward 最后一千轮的总奖励和agent奖励
                 final_ep_rewards.append(np.mean(episode_rewards[-arglist.save_rate:]))
                 for rew in agent_rewards:
                     final_ep_ag_rewards.append(np.mean(rew[-arglist.save_rate:]))
 
-            # saves final episode reward for plotting training curve later
+            # saves final episode reward for plotting training curve later 将最后save_rate轮奖励写入文件
             if len(episode_rewards) > arglist.num_episodes:
                 rew_file_name = arglist.plots_dir + arglist.exp_name + '_rewards.pkl'
                 with open(rew_file_name, 'wb') as fp:

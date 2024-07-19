@@ -1,4 +1,5 @@
 import numpy as np
+import tensorflow as tf
 print(np.log(2.0 * np.pi * np.e), 1)
 a=list([1,1])
 v=1
@@ -11,3 +12,4 @@ comm=[1,2,3]
 comm=[111]
 print(comm)
 print(np.shape([[1,2],[2,2]]))
+print('GPU',tf.test.is_gpu_available())
