@@ -1,8 +1,13 @@
 import argparse
+import os
+
 import numpy as np
 import tensorflow as tf
 import time
 import pickle
+import matplotlib.pyplot as plt
+import keyboard
+import datetime
 
 import maddpg.common.tf_util as U
 from maddpg.trainer.maddpg import MADDPGAgentTrainer
@@ -14,8 +19,8 @@ def parse_args():
     # Environment
     parser.add_argument("--scenario", type=str, default="simple_world_comm", help="name of the scenario script")
     parser.add_argument("--max-episode-len", type=int, default=25, help="maximum episode length")
-    # parser.add_argument("--num-episodes", type=int, default=60000, help="number of episodes")
-    parser.add_argument("--num-episodes", type=int, default=2000, help="number of episodes")
+    parser.add_argument("--num-episodes", type=int, default=4000, help="number of episodes")
+    # parser.add_argument("--num-episodes", type=int, default=200, help="number of episodes")
     parser.add_argument("--num-adversaries", type=int, default=0, help="number of adversaries")  # 只有需要
     # 指定为DDPG算法时才需要确定这个
     parser.add_argument("--good-policy", type=str, default="maddpg", help="policy for good agents")
@@ -42,6 +47,7 @@ def parse_args():
                                                                                         "benchmark data is saved")
     parser.add_argument("--plots-dir", type=str, default="./learning_curves/", help="directory where plot "
                                                                                     "data is saved")
+    parser.add_argument("--learning-curves-figure-dir", type=str, default="./learning_curves_figure/", help="learning_curves_figure_directory")
     return parser.parse_args()
 
 
@@ -202,9 +208,31 @@ def train(arglist):
                 with open(agrew_file_name, 'wb') as fp:
                     pickle.dump(final_ep_ag_rewards, fp)
                 print('...Finished total of {} episodes.'.format(len(episode_rewards)))
+            # 绘图
+                plt.plot(range(1,len(episode_rewards)+1), episode_rewards, linewidth='1')
+                now_time = datetime.datetime.now()
+                time_str = str(now_time.year)+str(now_time.month)+str(now_time.day)+'_'+str(now_time.hour)+str(now_time.minute)+str(now_time.second)
+                png_folder_dir = arglist.learning_curves_figure_dir
+                png_dir = arglist.learning_curves_figure_dir+arglist.exp_name+'_'+ time_str + '.png'
+                plt.title("rewards vs episode")
+                plt.xlabel("episode")
+                plt.ylabel("rewards")
+                if not os.path.exists(png_folder_dir):
+                    os.makedirs(png_folder_dir)
+                    print("Folder created")
+                else:
+                    print("Folder already exists")
+                plt.savefig(png_dir)
+                plt.show()
+                # while True:
+                #     if keyboard.is_pressed('esc'):
+                #         break
+                #     time.sleep(0.1)
                 break
+
 
 
 if __name__ == '__main__':
     arglist = parse_args()
     train(arglist)
+
