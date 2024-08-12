@@ -1,15 +1,17 @@
 import numpy as np
 import tensorflow as tf
-print(np.log(2.0 * np.pi * np.e), 1)
-a=list([1,1])
-v=1
-print(type(1)("123"))
-print([1,1,1]+[[3,3,3],2,2])
-c=np.array([1,2,3])
-if any(c)>1:
-    print(c)
-comm=[1,2,3]
-comm=[111]
-print(comm)
-print(np.shape([[1,2],[2,2]]))
-print('GPU',tf.test.is_gpu_available())
+from maddpg_pytorch.distributions_pytorch import make_pdtype
+from maddpg_pytorch.multi_discrete import MultiDiscrete
+import torch
+# x = torch.rand(5, 3)
+# print(x,torch.cuda.is_available())
+# act_space = MultiDiscrete([[0, 4],[0,4]])
+# my_pdtype=make_pdtype(act_space)
+torch.zeros((None,9))
+# pd=my_pdtype.pdfromflat()
+# print(pd.sample())
+
+
+
+
+

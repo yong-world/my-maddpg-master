@@ -131,10 +131,11 @@ def train(arglist):
         while True:
             # get action
             action_n = [agent.action(obs) for agent, obs in zip(trainers, obs_n)]
-            # environment step
+            # environment step done因为场景给的done_callback是none所以返回的done_n只是[false false ...]
             new_obs_n, rew_n, done_n, info_n = env.step(action_n)
             episode_step += 1
             done = all(done_n)
+            # 每过max_episode_len=25步产生一次结束信号
             terminal = (episode_step >= arglist.max_episode_len)
             # collect experience
             for i, agent in enumerate(trainers):

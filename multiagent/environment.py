@@ -36,14 +36,15 @@ class MultiAgentEnv(gym.Env):
         self.shared_reward = world.collaborative if hasattr(world, 'collaborative') else False
         self.time = 0
 
-        # configure spaces
+        # configure spaces 计算环境内agent的动作空间和观察空间
         self.action_space = []
         self.observation_space = []
         for agent in self.agents:
             # 计算每个agent的物理动作空间和通信动作空间，然后由MultiDiscrete或者Tuple合成一个来管理，采样时，返回都是一个列表
+            # total_action_space包括物理动作空间和通讯动作空间
             total_action_space = []
             # physical action space
-            if self.discrete_action_space:
+            if self.discrete_action_space:  # 写死是true
                 u_action_space = spaces.Discrete(world.dim_p * 2 + 1)
             else:
                 u_action_space = spaces.Box(low=-agent.u_range, high=+agent.u_range, shape=(world.dim_p,), dtype=np.float32)
@@ -57,8 +58,8 @@ class MultiAgentEnv(gym.Env):
             if not agent.silent:
                 total_action_space.append(c_action_space)
             # total action space
-            if len(total_action_space) > 1:
-                # all action spaces are discrete, so simplify to MultiDiscrete action space
+            if len(total_action_space) > 1:  # 当存在通信时
+                # 如果所有动作空间都是离散的则转化成多离散空间
                 if all([isinstance(act_space, spaces.Discrete) for act_space in total_action_space]):
                     act_space = MultiDiscrete([[0, act_space.n - 1] for act_space in total_action_space])
                 else:

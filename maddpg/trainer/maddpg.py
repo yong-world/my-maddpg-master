@@ -51,7 +51,7 @@ def p_train(make_obs_ph_n, act_space_n, p_index, p_func, q_func, optimizer, grad
         if local_q_func:  # 如果是DDPG算法则q_input这么做
             q_input = tf.concat([obs_ph_n[p_index], act_input_n[p_index]], 1)
 
-        # 计算Q值，构建损失值，计算梯度并裁剪
+        # 计算Q值，构建损失值，计算梯度并裁剪，scope相同所以这里的q用的是q_train的q函数的网络参数
         q = q_func(q_input, 1, scope="q_func", reuse=True, num_units=num_units)[:, 0]  # [:,0]裁取所有行的第0列，在这没意义
         pg_loss = -tf.reduce_mean(q)  # 训练actor的时候不需要更新Q网络，所以不用哪些均方误差，只要往Q值增大大方向就行
         loss = pg_loss + p_reg * 1e-3
