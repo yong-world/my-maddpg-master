@@ -51,7 +51,7 @@ class PdType(object):
         return torch.zeros(prepend_shape + self.param_shape(), dtype=torch.float32)
 
     def sample_placeholder(self, prepend_shape, name=None):
-        return torch.zeros(prepend_shape + self.sample_shape(), dtype=self.sample_dtype())
+        return torch.zeros(self.sample_shape(), dtype=self.sample_dtype())
 
 class CategoricalPdType(PdType):
     def __init__(self, ncat):
@@ -71,7 +71,7 @@ class CategoricalPdType(PdType):
 
 class SoftCategoricalPdType(PdType):
     def __init__(self, ncat):
-        self.ncat = ncat
+        self.ncat = ncat  # 感觉ncat就是num of categorical
 
     def pdclass(self):
         return SoftCategoricalPd
@@ -205,7 +205,8 @@ class SoftCategoricalPd(Pd):
 
     def flatparam(self):
         return self.logits
-
+    def set_flat(self, new_flat):
+        self.logits = new_flat
     def mode(self):
         return F.softmax(self.logits, dim=-1)
 
@@ -271,11 +272,14 @@ class SoftMultiCategoricalPd(Pd):  # doesn't work yet不，还在用
         self.flat = flat
         self.low = torch.tensor(low, dtype=torch.float32)
         # 将当前actor网络输出(flat)拆分成[[5个]，[4个]]然后去实例化单个的软分类分布
-        self.categoricals = [SoftCategoricalPd(logits) for logits in torch.split(flat, high - low + 1, dim=len(flat.shape) - 1)]
+        # self.categoricals = [SoftCategoricalPd(logits) for logits in torch.split(flat, high - low + 1, dim=len(flat.shape) - 1)]
+        self.categoricals = [SoftCategoricalPd(logits) for logits in
+                             torch.split(flat, tuple(high - low + 1), dim=0)]
 
     def flatparam(self):
         return self.flat
-
+    def set_flat(self, new_flat):
+        self.flat = new_flat
     def mode(self):
         x = []
         for i in range(len(self.categoricals)):

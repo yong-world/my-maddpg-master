@@ -1,3 +1,4 @@
+import numpy
 import numpy as np
 import random
 import torch
@@ -6,6 +7,8 @@ import torch.optim as optim
 from maddpg import AgentTrainer
 from maddpg_pytorch.replay_buffer import ReplayBuffer
 from maddpg_pytorch.distributions_pytorch import make_pdtype
+
+
 # from maddpg.common.distributions import make_pdtype
 def discount_with_dones(rewards, dones, gamma):
     discounted = []
@@ -16,115 +19,6 @@ def discount_with_dones(rewards, dones, gamma):
         discounted.append(r)
     return discounted[::-1]
 
-def make_update_exp(vals, target_vals):
-    polyak = 1.0 - 1e-2
-    for var, var_target in zip(vals, target_vals):
-        var_target.data.copy_(polyak * var_target.data + (1.0 - polyak) * var.data)
-
-def p_train(make_obs_ph_n, act_space_n, p_index, p_func, q_func,grad_norm_clipping=None, local_q_func=False, num_units=64, lr=1e-2):
-    # 功能：
-    # 返回：动作分布的采样函数，网络的训练函数，actor网络软更新函数，(当前actor网络输出值函数,目标actor网络输出值函数)debug数据元组
-    # ###
-    act_pdtype_n = [make_pdtype(act_space) for act_space in act_space_n]
-    obs_ph_n = make_obs_ph_n
-    act_ph_n = [act_pdtype_n[i].sample_placeholder([None], name="action" + str(i)) for i in range(len(act_space_n))]
-    p_input = obs_ph_n[p_index]
-
-    p = p_func(p_input, int(act_pdtype_n[p_index].param_shape()[0]), num_units=num_units)
-    p_func_vars = list(p_func.parameters())
-
-    act_pd = act_pdtype_n[p_index].pdfromflat(p)
-    act_sample = act_pd.sample()
-    p_reg = torch.mean(torch.square(act_pd.flatparam()))
-
-    act_input_n = act_ph_n[:]
-    act_input_n[p_index] = act_pd.sample()
-    q_input = torch.cat(obs_ph_n + act_input_n, dim=1)
-    if local_q_func:
-        q_input = torch.cat([obs_ph_n[p_index], act_input_n[p_index]], dim=1)
-
-    q = q_func(q_input, 1, reuse=True, num_units=num_units)[:, 0]
-    pg_loss = -torch.mean(q)
-    loss = pg_loss + p_reg * 1e-3
-    optimizer = optim.Adam(p_func_vars, lr=lr)
-    optimizer.zero_grad()
-    loss.backward()
-    if grad_norm_clipping is not None:
-        torch.nn.utils.clip_grad_norm_(p_func_vars, grad_norm_clipping)
-    optimizer.step()
-
-    def train_fn(*inputs):
-        optimizer.zero_grad()
-        loss_val = loss(*inputs)
-        loss_val.backward()
-        if grad_norm_clipping is not None:
-            torch.nn.utils.clip_grad_norm_(p_func_vars, grad_norm_clipping)
-        optimizer.step()
-        return loss_val
-
-    def act_fn(obs):
-        with torch.no_grad():
-            return act_sample(obs).numpy()
-
-    def p_values_fn(obs):
-        with torch.no_grad():
-            return p(obs).numpy()
-
-    target_p = p_func(p_input, int(act_pdtype_n[p_index].param_shape()[0]), num_units=num_units)
-    target_p_func_vars = list(target_p.parameters())
-    update_target_p = make_update_exp(p_func_vars, target_p_func_vars)
-
-    def target_act_fn(obs):
-        with torch.no_grad():
-            return act_pdtype_n[p_index].pdfromflat(target_p).sample().numpy()
-
-    return act_fn, train_fn, update_target_p, {'p_values': p_values_fn, 'target_act': target_act_fn}
-
-def q_train(make_obs_ph_n, act_space_n, q_index, q_func,grad_norm_clipping=None, local_q_func=False,num_units=64,lr=1e-2):
-    act_pdtype_n = [make_pdtype(act_space) for act_space in act_space_n]
-    obs_ph_n = make_obs_ph_n
-    act_ph_n = [act_pdtype_n[i].sample_placeholder([None], name="action"+str(i)) for i in range(len(act_space_n))]
-    target_ph = torch.tensor([], dtype=torch.float32)
-
-    q_input = torch.cat(obs_ph_n + act_ph_n, dim=1)
-    if local_q_func:
-        q_input = torch.cat([obs_ph_n[q_index], act_ph_n[q_index]], dim=1)
-    q = q_func(q_input, 1, num_units=num_units)[:, 0]
-    q_func_vars = list(q_func.parameters())
-
-    q_loss = torch.mean(torch.square(q - target_ph))
-
-    q_reg = torch.mean(torch.square(q))
-    loss = q_loss  # + 1e-3 * q_reg
-    optimizer = optim.Adam(q_func_vars, lr=lr)
-    optimizer.zero_grad()
-    loss.backward()
-    if grad_norm_clipping is not None:
-        torch.nn.utils.clip_grad_norm_(q_func_vars, grad_norm_clipping)
-    optimizer.step()
-
-    def train_fn(*inputs):
-        optimizer.zero_grad()
-        loss_val = loss(*inputs)
-        loss_val.backward()
-        if grad_norm_clipping is not None:
-            torch.nn.utils.clip_grad_norm_(q_func_vars, grad_norm_clipping)
-        optimizer.step()
-        return loss_val
-
-    def q_values_fn(*inputs):
-        with torch.no_grad():
-            return q(*inputs).numpy()
-
-    target_q = q_func(q_input, 1, num_units=num_units)[:, 0]
-    target_q_func_vars = list(target_q.parameters())
-    update_target_q = make_update_exp(q_func_vars, target_q_func_vars)
-
-    def target_q_values_fn(*inputs):
-        with torch.no_grad():
-            return target_q(*inputs).numpy()
-
-    return train_fn, update_target_q, {'q_values': q_values_fn, 'target_q_values': target_q_values_fn}
 
 class MADDPGAgentTrainer(AgentTrainer):
     def __init__(self, name, model, obs_shape_n, act_space_n, agent_index, args, local_q_func=False):
@@ -134,35 +28,108 @@ class MADDPGAgentTrainer(AgentTrainer):
         self.args = args
         obs_ph_n = [torch.zeros(obs_shape_n[i]) for i in range(self.n)]
 
-        self.q_train, self.q_update, self.q_debug = q_train(
-            make_obs_ph_n=obs_ph_n,
+        # 初始化模型和优化器
+        self.p, self.p_optimizer, self.target_p, self.target_p_optimizer, self.act_pdtype, self.act_pd = self.init_p_model_optimizer(
             act_space_n=act_space_n,
-            q_index=agent_index,
-            q_func=model,
-            grad_norm_clipping=0.5,
-            local_q_func=local_q_func,
-            num_units=args.num_units,
-            lr=args.lr
-        )
-
-        self.act, self.p_train, self.p_update, self.p_debug = p_train(
-            make_obs_ph_n=obs_ph_n,
-            act_space_n=act_space_n,
-            p_index=agent_index,
-            p_func=model,
-            q_func=model,
-            grad_norm_clipping=0.5,
-            local_q_func=local_q_func,
-            num_units=args.num_units,
-            lr=args.lr
-        )
+            obs_ph_n=obs_ph_n, agent_index=agent_index, lr=args.lr, model=model,
+            num_units=args.num_units)
+        self.q, self.q_optimizer, self.target_q, self.target_q_optimizer = self.init_q_model_optimizer(
+            act_space_n=act_space_n, obs_ph_n=obs_ph_n, lr=args.lr,
+            model=model, num_units=args.num_units)
 
         self.replay_buffer = ReplayBuffer(int(1e6))
         self.max_replay_buffer_len = args.batch_size * args.max_episode_len
         self.replay_sample_index = None
 
+    def make_update_exp(self, vals, target_vals):
+        polyak = 1.0 - 1e-2
+        for var, var_target in zip(vals, target_vals):
+            var_target.data.copy_(polyak * var_target.data + (1.0 - polyak) * var.data)
+
+    def q_debug(self, obs_n, act_n, target_q_values):
+        batch_input = np.concatenate([np.concatenate(obs_n, axis=1), np.concatenate(act_n, axis=1)], axis=1)
+        batch_input = torch.from_numpy(batch_input)
+        # batch_input = torch.cat((torch.from_numpy(), torch.from_numpy()), dim=1)
+        if target_q_values is not False:
+            q_val = self.target_q(batch_input)
+        else:
+            q_val = self.q(batch_input)
+        return q_val
+
+    def p_debug(self, obs, target_p_values):
+        batch_input = torch.from_numpy(obs)
+        if target_p_values is not False:
+            p_val = self.target_p(batch_input)
+        else:
+            p_val = self.p(batch_input)
+        return p_val
+
+    def q_train(self, obs_n, act_n, y, grad_norm_clipping):
+        batch_input = np.concatenate([np.concatenate(obs_n, axis=1), np.concatenate(act_n, axis=1)], axis=1)
+        batch_input = torch.from_numpy(batch_input)
+        y=torch.from_numpy(y)
+        q_val = self.q(batch_input)
+        q_loss = torch.mean(torch.square(y - q_val))
+        q_reg = torch.mean(torch.square(q_val))
+        loss = q_loss  # + 1e-3 * q_reg
+        self.q_optimizer.zero_grad()
+        loss.backward()
+
+        if grad_norm_clipping is not None:
+            for parameter in list(self.p.parameters()):
+                torch.nn.utils.clip_grad_norm_(parameter, grad_norm_clipping)  # _原地修改tensor
+        self.q_optimizer.step()
+        return loss
+
+    def p_train(self, obs_n, act_n, grad_norm_clipping):
+        batch_input = np.concatenate([np.concatenate(obs_n, axis=1), np.concatenate(act_n, axis=1)], axis=1)
+        batch_input = torch.from_numpy(batch_input)
+        q_loss = -torch.mean(self.q(batch_input))
+        p_reg = torch.mean(torch.square(self.act_pd.flatparam()))
+        loss = q_loss + p_reg * 1e-3
+        self.p_optimizer.zero_grad()
+        loss.backward()
+        if grad_norm_clipping is not None:
+            for parameter in list(self.p.parameters()):
+                torch.nn.utils.clip_grad_norm_(parameter, grad_norm_clipping)
+        self.p_optimizer.step()
+        return loss
+
+    def init_p_model_optimizer(self, act_space_n, obs_ph_n, agent_index, model, num_units, lr):
+        # TODO act_pdtype_n转成act_pdtype会快点吧
+        act_pdtype_n = [make_pdtype(act_space) for act_space in act_space_n]
+        p_input = len(obs_ph_n[agent_index])  # p_index的索引是当前agent的编号
+        # param_shape()是去输出动作的个数的和
+        p = model(p_input, int(act_pdtype_n[agent_index].param_shape()[0]), num_units=num_units)
+        target_p = model(p_input, int(act_pdtype_n[agent_index].param_shape()[0]), num_units=num_units)
+        p_vars = list(p.parameters())
+        target_p_vars = list(target_p.parameters())
+        p_optimizer = optim.Adam(p_vars, lr=lr)
+        target_p_optimizer = optim.Adam(target_p_vars, lr=lr)
+
+        act_pd = act_pdtype_n[agent_index].pdfromflat(p(obs_ph_n[agent_index]))
+
+        return p, p_optimizer, target_p, target_p_optimizer, act_pdtype_n[agent_index], act_pd
+
+    def init_q_model_optimizer(self, act_space_n, obs_ph_n, lr, model, num_units):
+        act_pdtype_n = [make_pdtype(act_space) for act_space in act_space_n]
+        # TODO act_ph_n改进，ptrain同理
+        act_ph_n = [act_pdtype_n[i].sample_placeholder([None], name="action" + str(i)) for i in range(len(act_space_n))]
+        target_ph = torch.tensor([], dtype=torch.float32)
+        # 获取输入的尺寸，包括每个agent的观察和各自的动作空间大小
+        q_input = sum(i.numel() for i in obs_ph_n) + sum(i.numel() for i in act_ph_n)
+        q = model(q_input, num_outputs=1, num_units=num_units)
+        target_q = model(q_input, num_outputs=1, num_units=num_units)
+        q_vars = list(q.parameters())
+        target_q_vars = list(target_q.parameters())
+        q_optimizer = optim.Adam(q_vars, lr=lr)
+        target_q_optimizer = optim.Adam(target_q_vars, lr=lr)
+        return q, q_optimizer, target_q, target_q_optimizer
+
     def action(self, obs):
-        return self.act(obs[None])[0]
+        flat = self.p(torch.from_numpy(obs).to(dtype=torch.float32))
+        self.act_pd.set_flat(flat)
+        return self.act_pd.sample().detach().numpy()
 
     def experience(self, obs, act, rew, new_obs, done, terminal):
         self.replay_buffer.add(obs, act, rew, new_obs, float(done))
@@ -171,13 +138,12 @@ class MADDPGAgentTrainer(AgentTrainer):
         self.replay_sample_index = None
 
     def update(self, agents, t):
-        if len(self.replay_buffer) < self.max_replay_buffer_len:
+        if len(self.replay_buffer) < self.max_replay_buffer_len:  # 经验池够batch_size*max_episode_len=1024*25=25600
             return
-        if t % 100 != 0:  # 每百步骤更新一次
+        if t % 100 != 0:  # 每百训练步才更新一次
             return
 
         self.replay_sample_index = self.replay_buffer.make_index(self.args.batch_size)
-
         obs_n = []
         obs_next_n = []
         act_n = []
@@ -187,22 +153,23 @@ class MADDPGAgentTrainer(AgentTrainer):
             obs_n.append(obs)
             obs_next_n.append(obs_next)
             act_n.append(act)
+        # NOTE 取完所有agent的o,a,r,o',done再单独取自己的
         obs, act, rew, obs_next, done = self.replay_buffer.sample_index(index)
 
         num_sample = 1
         target_q = 0.0
-        # TODO p_debug和q_debug函数，p_train，q_train，p、qupdata，
-        for _ in range(num_sample):
-            target_act_next_n = [agents[i].p_debug['target_act'](obs_next_n[i]) for i in range(self.n)]
-            target_q_next = self.q_debug['target_q_values'](*(obs_next_n + target_act_next_n))
+        # 贝尔曼方程的实现,done在加入经验池的时候由布尔转float了
+        for no_use in range(num_sample):
+            target_act_next_n = [agents[i].p_debug(obs_next_n[i], target_p_values=True).detach().numpy() for i in
+            range(self.n)]
+            target_q_next = self.q_debug(obs_next_n, target_act_next_n, target_q_values=True).detach().numpy()
             target_q += rew + self.args.gamma * (1.0 - done) * target_q_next
         target_q /= num_sample
 
-        q_loss = self.q_train(*(obs_n + act_n + [target_q]))
+        q_loss = self.q_train(obs_n=obs_n, act_n=act_n, y=target_q, grad_norm_clipping=0.5)
+        p_loss = self.p_train(obs_n=obs_n, act_n=act_n, grad_norm_clipping=0.5)
 
-        p_loss = self.p_train(*(obs_n + act_n))
-
-        self.p_update()
-        self.q_update()
+        self.make_update_exp(vals=self.p.parameters(), target_vals=self.target_p.parameters())
+        self.make_update_exp(vals=self.q.parameters(), target_vals=self.target_q.parameters())
         # 返回值实际并没有被使用
         return [q_loss, p_loss, np.mean(target_q), np.mean(rew), np.mean(target_q_next), np.std(target_q)]

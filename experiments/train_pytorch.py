@@ -12,13 +12,14 @@ from maddpg_pytorch.maddpg_pytorch import MADDPGAgentTrainer
 from multiagent.environment import MultiAgentEnv
 import multiagent.scenarios as scenarios
 
+# improve volatile模式，gpu模式
 
 def parse_args():
     parser = argparse.ArgumentParser("Reinforcement Learning experiments for multiagent environments")
     # Environment
     parser.add_argument("--scenario", type=str, default="simple_world_comm", help="name of the scenario script")
     parser.add_argument("--max-episode-len", type=int, default=25, help="maximum episode length")
-    parser.add_argument("--num-episodes", type=int, default=4000, help="number of episodes")
+    parser.add_argument("--num-episodes", type=int, default=20000, help="number of episodes")
     parser.add_argument("--num-adversaries", type=int, default=0, help="number of adversaries")
     parser.add_argument("--good-policy", type=str, default="maddpg", help="policy for good agents")
     parser.add_argument("--adv-policy", type=str, default="maddpg", help="policy of adversaries")
@@ -62,6 +63,8 @@ class mlp_model(nn.Module):
         x = self.relu(self.fc2(x))
         x = self.fc3(x)
         return x
+
+
 def load_state(load_dir, trainers):
     """Load all the variables from the location <load_dir>"""
     checkpoint = torch.load(os.path.join(load_dir, "model.pt"))
@@ -103,7 +106,7 @@ def train(arglist):
 
     # Create agent trainers
     obs_shape_n = [env.observation_space[i].shape[0] for i in range(env.n)]
-    num_adversaries = min(env.n, arglist.num_adversaries)
+    num_adversaries = min(env.n, arglist.num_adversaries)  # env.n是策略个体数，arglist.num_adversaries默认是0，辅助指定ddpg个数
     trainers = get_trainers(env, num_adversaries, obs_shape_n, arglist)
     print('Using good policy {} and adv policy {}'.format(arglist.good_policy, arglist.adv_policy))
 
@@ -127,6 +130,7 @@ def train(arglist):
     print('Starting iterations...')
     while True:
         action_n = [agent.action(obs) for agent, obs in zip(trainers, obs_n)]
+        # done由于构建环境的时候没有传入done，所以传回都是false，并没有使用
         new_obs_n, rew_n, done_n, info_n = env.step(action_n)
         episode_step += 1
         done = all(done_n)
@@ -173,7 +177,7 @@ def train(arglist):
             loss = agent.update(trainers, train_step)
 
         if terminal and (len(episode_rewards) % arglist.save_rate == 0):
-            save_path = os.path.join(arglist.save_dir, "model.pt")
+            save_path = os.path.join(arglist.save_dir, arglist.exp_name + "pytorch_model.pt")
             torch.save({'trainers': trainers}, save_path)
             print(f"Model saved to {save_path}")
 
@@ -190,7 +194,7 @@ def train(arglist):
             final_ep_rewards.append(np.mean(episode_rewards[-arglist.save_rate:]))
             for rew in agent_rewards:
                 final_ep_ag_rewards.append(np.mean(rew[-arglist.save_rate:]))
-
+        # saves final episode reward for plotting training curve later 将最后save_rate轮奖励写入文件
         if len(episode_rewards) > arglist.num_episodes:
             rew_file_name = arglist.plots_dir + arglist.exp_name + '_rewards.pkl'
             with open(rew_file_name, 'wb') as fp:
@@ -199,12 +203,13 @@ def train(arglist):
             with open(agrew_file_name, 'wb') as fp:
                 pickle.dump(final_ep_ag_rewards, fp)
             print('...Finished total of {} episodes.'.format(len(episode_rewards)))
+            # 绘图
             plt.plot(range(1, len(episode_rewards) + 1), episode_rewards, linewidth='1')
             now_time = datetime.datetime.now()
             time_str = now_time.strftime('%Y%m%d_%H%M%S')
             png_folder_dir = arglist.learning_curves_figure_dir
             png_dir = os.path.join(png_folder_dir, arglist.exp_name + '_' + time_str + '.png')
-            plt.title("rewards vs episode")
+            plt.title("rewards  episode")
             plt.xlabel("episode")
             plt.ylabel("rewards")
             if not os.path.exists(png_folder_dir):
@@ -221,7 +226,12 @@ def train(arglist):
             break
 
 
-
 if __name__ == '__main__':
     arglist = parse_args()
+    rew_file_name = arglist.plots_dir + arglist.exp_name + '_rewards.pkl'
+    with open(rew_file_name, 'wb') as fp:
+        print(rew_file_name)
+    agrew_file_name = arglist.plots_dir + arglist.exp_name + '_agrewards.pkl'
+    with open(agrew_file_name, 'wb') as fp:
+        print(agrew_file_name)
     train(arglist)

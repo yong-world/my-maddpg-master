@@ -55,6 +55,7 @@ def p_train(make_obs_ph_n, act_space_n, p_index, p_func, q_func, optimizer, grad
         q = q_func(q_input, 1, scope="q_func", reuse=True, num_units=num_units)[:, 0]  # [:,0]裁取所有行的第0列，在这没意义
         pg_loss = -tf.reduce_mean(q)  # 训练actor的时候不需要更新Q网络，所以不用哪些均方误差，只要往Q值增大大方向就行
         loss = pg_loss + p_reg * 1e-3
+        # 具体来说，输入一层隐藏两层输出一层，中间有三组线，每组有权重和偏置两种，所以得到的网络参数是一个3*2的列表
         optimize_expr = U.minimize_and_clip(optimizer, loss, p_func_vars, grad_norm_clipping)  # 使用L2正则化对网络梯度裁剪并
         # 应用
         # 返回一个优化器的操作，<tf.Operation 'agent_0_1/Adam' type=NoOp>
@@ -67,6 +68,7 @@ def p_train(make_obs_ph_n, act_space_n, p_index, p_func, q_func, optimizer, grad
         # 目标P网络生成目标P值，借助目标P值和先前确定的观察分布类型构建输出动作分布的采样
         target_p = p_func(p_input, int(act_pdtype_n[p_index].param_shape()[0]), scope="target_p_func",
                           num_units=num_units)
+        # 目前来看，两个网络的初始化参数是不一样的
         target_p_func_vars = U.scope_vars(U.absolute_scope_name("target_p_func"))
         update_target_p = make_update_exp(p_func_vars, target_p_func_vars)
 
@@ -162,7 +164,7 @@ class MADDPGAgentTrainer(AgentTrainer):
         self.replay_sample_index = None
 
     def update(self, agents, t):
-        if len(self.replay_buffer) < self.max_replay_buffer_len: # replay buffer is not large enough 如果个人经验池没满
+        if len(self.replay_buffer) < self.max_replay_buffer_len:  # replay buffer is not large enough 如果个人经验池没满
             return
         if not t % 100 == 0:  # only update every 100 steps 百步更新一次
             return
