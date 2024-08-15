@@ -19,7 +19,7 @@ def parse_args():
     # Environment
     parser.add_argument("--scenario", type=str, default="simple_world_comm", help="name of the scenario script")
     parser.add_argument("--max-episode-len", type=int, default=25, help="maximum episode length")
-    parser.add_argument("--num-episodes", type=int, default=60000, help="number of episodes")
+    parser.add_argument("--num-episodes", type=int, default=10000, help="number of episodes")
     # parser.add_argument("--num-episodes", type=int, default=200, help="number of episodes")
     parser.add_argument("--num-adversaries", type=int, default=0, help="number of adversaries")  # 只有需要
     # 指定为DDPG算法时才需要确定这个
