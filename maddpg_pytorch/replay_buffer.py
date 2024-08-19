@@ -40,7 +40,7 @@ class ReplayBuffer(object):
             actions.append(np.array(action, copy=False,dtype=np.float32))
             rewards.append(np.array(reward, copy=False,dtype=np.float32))
             obses_tp1.append(np.array(obs_tp1, copy=False,dtype=np.float32))
-            dones.append(done)
+            dones.append(np.array(done,copy=False,dtype=np.float32))
         return np.array(obses_t), np.array(actions), np.array(rewards), np.array(obses_tp1), np.array(dones)
 
     def make_index(self, batch_size):
