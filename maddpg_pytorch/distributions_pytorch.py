@@ -6,10 +6,12 @@ from gym import spaces
 # from maddpg_pytorch.multi_discrete import MultiDiscrete
 from multiagent.multi_discrete import MultiDiscrete
 
+
 class Pd(object):
     """
     A particular probability distribution
     """
+
     def flatparam(self):
         raise NotImplementedError
 
@@ -28,10 +30,12 @@ class Pd(object):
     def sample(self):
         raise NotImplementedError
 
+
 class PdType(object):
     """
     Parametrized family of probability distributions
     """
+
     def pdclass(self):
         raise NotImplementedError
 
@@ -53,6 +57,7 @@ class PdType(object):
     def sample_placeholder(self, prepend_shape, name=None):
         return torch.zeros(self.sample_shape(), dtype=self.sample_dtype())
 
+
 class CategoricalPdType(PdType):
     def __init__(self, ncat):
         self.ncat = ncat
@@ -69,6 +74,7 @@ class CategoricalPdType(PdType):
     def sample_dtype(self):
         return torch.int32
 
+
 class SoftCategoricalPdType(PdType):
     def __init__(self, ncat):
         self.ncat = ncat  # 感觉ncat就是num of categorical
@@ -84,6 +90,7 @@ class SoftCategoricalPdType(PdType):
 
     def sample_dtype(self):
         return torch.float32
+
 
 class MultiCategoricalPdType(PdType):
     def __init__(self, low, high):
@@ -106,6 +113,7 @@ class MultiCategoricalPdType(PdType):
     def sample_dtype(self):
         return torch.int32
 
+
 class SoftMultiCategoricalPdType(PdType):
     def __init__(self, low, high):
         self.low = low
@@ -127,6 +135,7 @@ class SoftMultiCategoricalPdType(PdType):
     def sample_dtype(self):
         return torch.float32
 
+
 class DiagGaussianPdType(PdType):
     def __init__(self, size):
         self.size = size
@@ -143,6 +152,7 @@ class DiagGaussianPdType(PdType):
     def sample_dtype(self):
         return torch.float32
 
+
 class BernoulliPdType(PdType):
     def __init__(self, size):
         self.size = size
@@ -158,6 +168,7 @@ class BernoulliPdType(PdType):
 
     def sample_dtype(self):
         return torch.int32
+
 
 class CategoricalPd(Pd):
     def __init__(self, logits):
@@ -197,6 +208,7 @@ class CategoricalPd(Pd):
     def fromflat(cls, flat):
         return cls(flat)
 
+
 class SoftCategoricalPd(Pd):
     # 使用Gumbel-softmax实现的软分类分布
     # 通过对网络输出增加Gumbel噪声达到类似于采样的效果同时保持可微性
@@ -205,8 +217,10 @@ class SoftCategoricalPd(Pd):
 
     def flatparam(self):
         return self.logits
+
     def set_flat(self, new_flat):
         self.logits = new_flat
+
     def mode(self):
         return F.softmax(self.logits, dim=-1)
 
@@ -230,7 +244,8 @@ class SoftCategoricalPd(Pd):
         p0 = ea0 / z0
         return (p0 * (torch.log(z0) - a0)).sum(dim=1)
 
-    def sample(self):
+    def sample(self,flat):
+        self.logits=flat
         u = torch.rand_like(self.logits)
         return F.softmax(self.logits - torch.log(-torch.log(u)), dim=-1)
 
@@ -238,11 +253,13 @@ class SoftCategoricalPd(Pd):
     def fromflat(cls, flat):
         return cls(flat)
 
+
 class MultiCategoricalPd(Pd):
     def __init__(self, low, high, flat):
         self.flat = flat
         self.low = torch.tensor(low, dtype=torch.int32)
-        self.categoricals = [CategoricalPd(logits) for logits in torch.split(flat, high - low + 1, dim=len(flat.shape) - 1)]
+        self.categoricals = [CategoricalPd(logits) for logits in
+                             torch.split(flat, high - low + 1, dim=len(flat.shape) - 1)]
 
     def flatparam(self):
         return self.flat
@@ -266,20 +283,24 @@ class MultiCategoricalPd(Pd):
     def fromflat(cls, flat):
         return cls(flat)
 
+
 class SoftMultiCategoricalPd(Pd):  # doesn't work yet不，还在用
     def __init__(self, low, high, flat):
         # flat是当前actor网络输出，high其中的值分别对应4和3，low是0
         self.flat = flat
         self.low = torch.tensor(low, dtype=torch.float32)
+        self.split_num_size = tuple(high - low + 1)
         # 将当前actor网络输出(flat)拆分成[[5个]，[4个]]然后去实例化单个的软分类分布
         # self.categoricals = [SoftCategoricalPd(logits) for logits in torch.split(flat, high - low + 1, dim=len(flat.shape) - 1)]
         self.categoricals = [SoftCategoricalPd(logits) for logits in
-                             torch.split(flat, tuple(high - low + 1), dim=0)]
+                             torch.split(flat, tuple(high - low + 1), dim=-1)]
 
     def flatparam(self):
         return self.flat
+
     def set_flat(self, new_flat):
         self.flat = new_flat
+
     def mode(self):
         x = []
         for i in range(len(self.categoricals)):
@@ -295,15 +316,17 @@ class SoftMultiCategoricalPd(Pd):  # doesn't work yet不，还在用
     def entropy(self):
         return sum(p.entropy() for p in self.categoricals)
 
-    def sample(self):
+    def sample(self, flat):
         x = []
+        flat = torch.split(flat, self.split_num_size, dim=-1)
         for i in range(len(self.categoricals)):
-            x.append(self.low[i] + self.categoricals[i].sample())
+            x.append(self.low[i] + self.categoricals[i].sample(flat[i]))
         return torch.cat(x, dim=-1)
 
     @classmethod
     def fromflat(cls, flat):
         return cls(flat)
+
 
 class DiagGaussianPd(Pd):
     def __init__(self, flat):
@@ -320,11 +343,14 @@ class DiagGaussianPd(Pd):
         return self.mean
 
     def logp(self, x):
-        return -0.5 * torch.sum(((x - self.mean) / self.std)**2 + 2 * self.logstd + np.log(2.0 * np.pi), dim=len(x.shape) - 1)
+        return -0.5 * torch.sum(((x - self.mean) / self.std) ** 2 + 2 * self.logstd + np.log(2.0 * np.pi),
+                                dim=len(x.shape) - 1)
 
     def kl(self, other):
         assert isinstance(other, DiagGaussianPd)
-        return torch.sum(other.logstd - self.logstd + (self.std**2 + (self.mean - other.mean)**2) / (2.0 * other.std**2) - 0.5, dim=len(self.mean.shape) - 1)
+        return torch.sum(
+            other.logstd - self.logstd + (self.std ** 2 + (self.mean - other.mean) ** 2) / (2.0 * other.std ** 2) - 0.5,
+            dim=len(self.mean.shape) - 1)
 
     def entropy(self):
         return torch.sum(self.logstd + .5 * np.log(2.0 * np.pi * np.e), dim=len(self.mean.shape) - 1)
@@ -335,6 +361,7 @@ class DiagGaussianPd(Pd):
     @classmethod
     def fromflat(cls, flat):
         return cls(flat)
+
 
 class BernoulliPd(Pd):
     def __init__(self, logits):
@@ -351,10 +378,15 @@ class BernoulliPd(Pd):
 
     def kl(self, other):
         assert isinstance(other, BernoulliPd)
-        return torch.sum(torch.sigmoid(self.logits) * (torch.log(torch.sigmoid(self.logits)) - torch.log(torch.sigmoid(other.logits))) + (1 - torch.sigmoid(self.logits)) * (torch.log(1 - torch.sigmoid(self.logits)) - torch.log(1 - torch.sigmoid(other.logits))), dim=len(self.logits.shape) - 1)
+        return torch.sum(torch.sigmoid(self.logits) * (
+                torch.log(torch.sigmoid(self.logits)) - torch.log(torch.sigmoid(other.logits))) + (
+                                 1 - torch.sigmoid(self.logits)) * (
+                                 torch.log(1 - torch.sigmoid(self.logits)) - torch.log(
+                             1 - torch.sigmoid(other.logits))), dim=len(self.logits.shape) - 1)
 
     def entropy(self):
-        return torch.sum(F.binary_cross_entropy_with_logits(self.logits, torch.sigmoid(self.logits), reduction='none'), dim=len(self.logits.shape) - 1)
+        return torch.sum(F.binary_cross_entropy_with_logits(self.logits, torch.sigmoid(self.logits), reduction='none'),
+                         dim=len(self.logits.shape) - 1)
 
     def sample(self):
         return Bernoulli(logits=self.logits).sample()
@@ -378,6 +410,7 @@ def make_pdtype(ac_space):
         return BernoulliPdType(ac_space.n)
     else:
         raise NotImplementedError
+
 
 def shape_el(v, i):
     maybe = v.shape[i]

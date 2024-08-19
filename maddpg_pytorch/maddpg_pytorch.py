@@ -19,7 +19,7 @@ class MADDPGAgentTrainer(AgentTrainer):
         obs_ph_n = [torch.zeros(obs_shape_n[i]) for i in range(self.n)]
 
         # 初始化模型和优化器
-        self.p, self.p_optimizer, self.target_p, self.act_pdtype = self.init_p_model_optimizer(
+        self.p, self.p_optimizer, self.target_p, self.act_pdtype, self.act_pd = self.init_p_model_optimizer(
             act_space_n=act_space_n,
             obs_ph_n=obs_ph_n, agent_index=agent_index, lr=args.lr, model=model,
             num_units=args.num_units)
@@ -37,10 +37,11 @@ class MADDPGAgentTrainer(AgentTrainer):
 
         # param_shape()是去输出动作的个数的和,因为输出是一个元素的列表所以需要[0]
         p = model(p_input, int(act_pdtype.param_shape()[0]), num_units=num_units)
+        act_pd = act_pdtype.pdfromflat(p(torch.rand(p_input)))
         target_p = model(p_input, int(act_pdtype.param_shape()[0]), num_units=num_units)
         p_vars = p.parameters()
         p_optimizer = optim.Adam(p_vars, lr=lr)
-        return p, p_optimizer, target_p, act_pdtype
+        return p, p_optimizer, target_p, act_pdtype, act_pd
 
     def init_q_model_optimizer(self, act_space_n, obs_ph_n, lr, model, num_units):
         act_pdtype_n = [make_pdtype(act_space) for act_space in act_space_n]
@@ -95,9 +96,10 @@ class MADDPGAgentTrainer(AgentTrainer):
         # act_input需要将当前策略根据观察选择的动作的采样放进去，目前梯度裁剪没啥问题
         # 根据智能体当前观察获取当前的动作输出分布采样
         act_output = self.p(obs_n[self.agent_index])
-        act_output_sample = torch.empty(act_output.shape)
-        for i in range(act_output.shape[0]):
-            act_output_sample[i] = self.act_pdtype.pdfromflat(act_output[i]).sample()
+        # act_output_sample = torch.empty(act_output.shape)
+        # for i in range(act_output.shape[0]):
+        #     act_output_sample[i] = self.act_pdtype.pdfromflat(act_output[i]).sample()
+        act_output_sample = self.act_pd.sample(act_output)
         act_n[self.agent_index] = act_output_sample
 
         batch_input = torch.cat([torch.cat(obs_n, dim=1), torch.cat(act_n, dim=1)], dim=1)
@@ -115,8 +117,9 @@ class MADDPGAgentTrainer(AgentTrainer):
 
     def action(self, obs):
         # 输入观察输出动作分布的采样
-        flat = self.p(torch.from_numpy(obs).to(dtype=torch.float32))
-        return self.act_pdtype.pdfromflat(flat).sample().detach().numpy()
+        flat = self.p(torch.from_numpy(obs).to(torch.float32))
+        # return self.act_pdtype.pdfromflat(flat).sample().detach().numpy()
+        return self.act_pd.sample(flat).detach().cpu().numpy()
 
     def experience(self, obs, act, rew, new_obs, done, terminal):
         self.replay_buffer.add(obs, act, rew, new_obs, float(done))
@@ -140,7 +143,7 @@ class MADDPGAgentTrainer(AgentTrainer):
         obs, act, rew, obs_next, done = self.replay_buffer.sample_index(index)
         return obs_n, obs_next_n, act_n, obs, act, rew, obs_next, done
 
-    def berman(self,agents,obs_next_n,rew):
+    def berman(self, agents, obs_next_n, rew):
         num_sample = 1
         target_q = 0.0
         # for no_use in range(num_sample):
@@ -149,25 +152,32 @@ class MADDPGAgentTrainer(AgentTrainer):
         #         target_act_next_n.append(torch.as_tensor([agents[i].act_pdtype.pdfromflat(flat[j]).sample().detach().numpy() for j in range(flat.shape[0])],dtype=np.float32,copy=False))
         # 贝尔曼方程的实现,done在加入经验池的时候由布尔转float了
         target_act_next_n = []
+        # for no_use in range(num_sample):
+        #     for i in range(self.n):
+        #         flat = agents[i].p_debug(obs_next_n[i], target_p_values=True)
+        #         target_act_next_sample = torch.empty((self.args.batch_size, agents[i].act_pdtype.param_shape()[0]))
+        #         for j in range(self.args.batch_size):
+        #             target_act_next_sample[j] = agents[i].act_pdtype.pdfromflat(flat[j]).sample().detach()
+        #         target_act_next_n.append(target_act_next_sample)
+        #     target_q_next = self.q_debug(obs_next_n, target_act_next_n, target_q_values=True).detach().numpy()
+        #     target_q += rew.reshape(target_q_next.shape) + self.args.gamma * target_q_next
+        # target_q /= num_sample
         for no_use in range(num_sample):
             for i in range(self.n):
                 flat = agents[i].p_debug(obs_next_n[i], target_p_values=True)
-                target_act_next_sample = torch.empty((self.args.batch_size, agents[i].act_pdtype.param_shape()[0]))
-                for j in range(self.args.batch_size):
-                    target_act_next_sample[j] = agents[i].act_pdtype.pdfromflat(flat[j]).sample().detach()
-                target_act_next_n.append(target_act_next_sample)
+                target_act_next_n.append(agents[i].act_pd.sample(flat))
             target_q_next = self.q_debug(obs_next_n, target_act_next_n, target_q_values=True).detach().numpy()
             target_q += rew.reshape(target_q_next.shape) + self.args.gamma * target_q_next
         target_q /= num_sample
         return target_q
+
     def update(self, agents, t):
         if len(self.replay_buffer) < self.max_replay_buffer_len:  # 经验池够batch_size*max_episode_len=1024*25=25600
             return
         if t % 100 != 0:  # 每百训练步才更新一次
             return
-        obs_n, obs_next_n, act_n, obs, act, rew, obs_next, done=self.sample_from_replay(agents)
-        target_q=self.berman(agents,obs_next_n,rew)
-
+        obs_n, obs_next_n, act_n, obs, act, rew, obs_next, done = self.sample_from_replay(agents)
+        target_q = self.berman(agents, obs_next_n, rew)
 
         q_loss = self.q_train(obs_n=obs_n, act_n=act_n, y=target_q, grad_norm_clipping=0.5)
         p_loss = self.p_train(obs_n=obs_n, act_n=act_n, grad_norm_clipping=0.5)
