@@ -124,12 +124,7 @@ class MADDPGAgentTrainer(AgentTrainer):
     def preupdate(self):
         self.replay_sample_index = None
 
-    def update(self, agents, t):
-        if len(self.replay_buffer) < self.max_replay_buffer_len:  # 经验池够batch_size*max_episode_len=1024*25=25600
-            return
-        if t % 100 != 0:  # 每百训练步才更新一次
-            return
-
+    def sample_from_replay(self, agents):
         self.replay_sample_index = self.replay_buffer.make_index(self.args.batch_size)
 
         obs_n = []
@@ -143,7 +138,9 @@ class MADDPGAgentTrainer(AgentTrainer):
             act_n.append(torch.from_numpy(act))
         # NOTE 取完所有agent的o,a,r,o',done再单独取自己的
         obs, act, rew, obs_next, done = self.replay_buffer.sample_index(index)
+        return obs_n, obs_next_n, act_n, obs, act, rew, obs_next, done
 
+    def berman(self,agents,obs_next_n,rew):
         num_sample = 1
         target_q = 0.0
         # for no_use in range(num_sample):
@@ -162,6 +159,15 @@ class MADDPGAgentTrainer(AgentTrainer):
             target_q_next = self.q_debug(obs_next_n, target_act_next_n, target_q_values=True).detach().numpy()
             target_q += rew.reshape(target_q_next.shape) + self.args.gamma * target_q_next
         target_q /= num_sample
+        return target_q
+    def update(self, agents, t):
+        if len(self.replay_buffer) < self.max_replay_buffer_len:  # 经验池够batch_size*max_episode_len=1024*25=25600
+            return
+        if t % 100 != 0:  # 每百训练步才更新一次
+            return
+        obs_n, obs_next_n, act_n, obs, act, rew, obs_next, done=self.sample_from_replay(agents)
+        target_q=self.berman(agents,obs_next_n,rew)
+
 
         q_loss = self.q_train(obs_n=obs_n, act_n=act_n, y=target_q, grad_norm_clipping=0.5)
         p_loss = self.p_train(obs_n=obs_n, act_n=act_n, grad_norm_clipping=0.5)
