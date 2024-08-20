@@ -20,7 +20,7 @@ def parse_args():
     # Environment
     parser.add_argument("--scenario", type=str, default="simple_world_comm", help="name of the scenario script")
     parser.add_argument("--max-episode-len", type=int, default=25, help="maximum episode length")
-    parser.add_argument("--num-episodes", type=int, default=10000, help="number of episodes")
+    parser.add_argument("--num-episodes", type=int, default=60000, help="number of episodes")
     parser.add_argument("--num-adversaries", type=int, default=0, help="number of adversaries")
     parser.add_argument("--good-policy", type=str, default="maddpg", help="policy for good agents")
     parser.add_argument("--adv-policy", type=str, default="maddpg", help="policy of adversaries")
@@ -85,7 +85,7 @@ def make_env(scenario_name, arglist, benchmark=False):
     return env
 
 
-def get_trainers(env, num_adversaries, obs_shape_n, arglist,device):
+def get_trainers(env, num_adversaries, obs_shape_n, arglist, device):
     trainers = []
     model = mlp_model
     trainer = MADDPGAgentTrainer
@@ -93,11 +93,11 @@ def get_trainers(env, num_adversaries, obs_shape_n, arglist,device):
         # action_space是根据动作维度和通信维度得到的box、discrete
         trainers.append(trainer(
             "agent_%d" % i, model, obs_shape_n, env.action_space, i, arglist,
-            local_q_func=(arglist.adv_policy == 'ddpg'),device=device))
+            local_q_func=(arglist.adv_policy == 'ddpg'), device=device))
     for i in range(num_adversaries, env.n):
         trainers.append(trainer(
             "agent_%d" % i, model, obs_shape_n, env.action_space, i, arglist,
-            local_q_func=(arglist.good_policy == 'ddpg'),device=device))
+            local_q_func=(arglist.good_policy == 'ddpg'), device=device))
     return trainers
 
 
@@ -129,7 +129,7 @@ def train(arglist):
     # Create agent trainers
     obs_shape_n = [env.observation_space[i].shape[0] for i in range(env.n)]
     num_adversaries = min(env.n, arglist.num_adversaries)  # env.n是策略个体数，arglist.num_adversaries默认是0，辅助指定ddpg个数
-    trainers = get_trainers(env, num_adversaries, obs_shape_n, arglist,device)
+    trainers = get_trainers(env, num_adversaries, obs_shape_n, arglist, device)
     print('Using good policy {} and adv policy {}'.format(arglist.good_policy, arglist.adv_policy))
 
     # Load previous results, if necessary
@@ -174,7 +174,12 @@ def train(arglist):
         terminal = (episode_step >= arglist.max_episode_len)
 
         for i, agent in enumerate(trainers):
-            agent.experience(obs_n[i], action_n[i], rew_n[i], new_obs_n[i], done_n[i], terminal)
+            agent.experience(np.array(obs_n[i], dtype=np.float32, copy=False),
+                             np.array(action_n[i], dtype=np.float32, copy=False),
+                             np.array(rew_n[i], dtype=np.float32, copy=False),
+                             np.array(new_obs_n[i], dtype=np.float32, copy=False),
+                             np.array(done_n[i], dtype=np.float32, copy=False),
+                             np.array(terminal, dtype=np.float32, copy=False))
         obs_n = new_obs_n
 
         for i, rew in enumerate(rew_n):
@@ -215,7 +220,9 @@ def train(arglist):
         # 每save_rate(1000)轮保存模型,输出训练信息
         if terminal and (len(episode_rewards) % arglist.save_rate == 0):
             save_path = os.path.join(arglist.save_dir, arglist.exp_name + "pytorch_model.pt")
-            torch.save({'trainers': trainers}, save_path)
+            # torch.save({'trainers': trainers}, save_path)
+            torch.save({'trainers': [(trainers[i].p, trainers[i].target_p, trainers[i].q, trainers[i].target_q) for i in
+                range(trainers[0].n)]}, save_path)
             # print(f"Model saved to {save_path}")
 
             if num_adversaries == 0:

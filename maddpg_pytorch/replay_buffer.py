@@ -36,11 +36,11 @@ class ReplayBuffer(object):
         for i in idxes:
             data = self._storage[i]
             obs_t, action, reward, obs_tp1, done = data
-            obses_t.append(np.array(obs_t, copy=False,dtype=np.float32))  # 不用深拷贝而是引用来加快速度节省资源
-            actions.append(np.array(action, copy=False,dtype=np.float32))
-            rewards.append(np.array(reward, copy=False,dtype=np.float32))
-            obses_tp1.append(np.array(obs_tp1, copy=False,dtype=np.float32))
-            dones.append(np.array(done,copy=False,dtype=np.float32))
+            obses_t.append(obs_t)  # 不用深拷贝而是引用来加快速度节省资源
+            actions.append(action)
+            rewards.append(reward)
+            obses_tp1.append(obs_tp1)
+            dones.append(done)
         return np.array(obses_t), np.array(actions), np.array(rewards), np.array(obses_tp1), np.array(dones)
 
     def make_index(self, batch_size):
