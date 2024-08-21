@@ -172,7 +172,7 @@ class World(object):
         if agent.silent:
             agent.state.c = np.zeros(self.dim_c)
         else:
-            noise = np.random.randn(*agent.action.c.shape) * agent.c_noise if agent.c_noise else 0.0
+            noise = np.random.randn(*agent.action.c.shape) * agent.c_noise if agent.c_noise else 0.0  # 目前是none，没有别改变
             agent.state.c = agent.action.c + noise      
 
     # get collision forces for any contact between two entities

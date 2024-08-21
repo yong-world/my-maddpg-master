@@ -164,7 +164,8 @@ def train(arglist):
         fp.write('num-episodes:{}\t'.format(str(arglist.num_episodes)))
         fp.write('batch-size:{}\t'.format(str(arglist.batch_size)))
         fp.write('save-rates:{}\t'.format(str(arglist.save_rate)))
-        fp.write('lr:{}\n'.format(str(arglist.lr)))
+        fp.write('lr:{}\t'.format(str(arglist.lr)))
+        fp.write('comm-channels:{}\n'.format(str(env.world.dim_c)))
     while True:
         action_n = [agent.action(obs) for agent, obs in zip(trainers, obs_n)]
         # done由于构建环境的时候没有传入done，所以传回都是false，并没有使用
@@ -275,4 +276,5 @@ if __name__ == '__main__':
     if not os.path.exists(arglist.log_dir):
         os.makedirs(arglist.log_dir)
         print("Folder created")
-    train(arglist)
+    for i in range(1):
+        train(arglist)

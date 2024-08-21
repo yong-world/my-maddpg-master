@@ -7,7 +7,7 @@ class Scenario(BaseScenario):
     def make_world(self):
         world = World()
         # set any world properties first
-        world.dim_c = 4
+        world.dim_c = 0
         #world.damping = 1
         num_good_agents = 2
         num_adversaries = 4
@@ -21,7 +21,8 @@ class Scenario(BaseScenario):
             agent.name = 'agent %d' % i
             agent.collide = True
             agent.leader = True if i == 0 else False
-            agent.silent = True if i > 0 else False
+            # agent.silent = True if i > 0 else False
+            agent.silent = True
             agent.adversary = True if i < num_adversaries else False
             agent.size = 0.075 if agent.adversary else 0.045
             agent.accel = 3.0 if agent.adversary else 4.0  # 加速度
@@ -111,7 +112,7 @@ class Scenario(BaseScenario):
             landmark.state.p_pos = np.random.uniform(-0.9, +0.9, world.dim_p)
             landmark.state.p_vel = np.zeros(world.dim_p)
 
-    def benchmark_data(self, agent, world):
+    def benchmark_data(self, agent, world):  # 返回碰撞数的信息
         if agent.adversary:
             collisions = 0
             for a in self.good_agents(world):
@@ -246,6 +247,7 @@ class Scenario(BaseScenario):
             if not entity.boundary:
                 food_pos.append(entity.state.p_pos - agent.state.p_pos)
         # communication of all other agents
+        # 将其他智能体的通信状态添加到 comm 列表中
         comm = []
         other_pos = []
         other_vel = []
@@ -265,8 +267,9 @@ class Scenario(BaseScenario):
                 if not other.adversary:
                     other_vel.append([0, 0])
 
-        # to tell the pred when the prey are in the forest
-        # 所以说四个猎人的根本目的是狩猎两个猎物，接近猎物，两个猎物的目的：是采集浆果，逃避抓捕远离边界，原理边界靠近浆果
+        # to tell the pred when the prey are in the forest 当猎物在森林时告诉猎人
+        # 所以说四个猎人的根本目的是狩猎两个猎物，接近猎物，两个猎物的目的：是采集浆果，逃避抓捕远离边界，远离边界靠近浆果
+        # TODO prey_forest
         prey_forest = []
         ga = self.good_agents(world)
         for a in ga:
@@ -274,7 +277,7 @@ class Scenario(BaseScenario):
                 prey_forest.append(np.array([1]))
             else:
                 prey_forest.append(np.array([-1]))
-        # to tell leader when pred are in forest
+        # to tell leader when pred are in forest  当猎人在森林里时告诉猎物
         prey_forest_lead = []
         for f in world.forests:
             if any([self.is_collision(a, f) for a in ga]):
@@ -282,7 +285,7 @@ class Scenario(BaseScenario):
             else:
                 prey_forest_lead.append(np.array([-1]))
 
-        comm = [world.agents[0].state.c]    # TODO 覆盖了？只有leader的消息了
+        comm = [world.agents[0].state.c]    # TODO
         # other_vel在代码里是专门指good_agent的速度
         # agent.state.p_vel自身速度2，agent.state.p_pos自身位置2，entity_pos地标位置（高山、森林、资源点）5*2，
         # other_pos其它智能体位置5*2，other_vel好智能体速度(good)2或者(adversary)2*2，in_forest自身是否在森林里2,comm通信信息4

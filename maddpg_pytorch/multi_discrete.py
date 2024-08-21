@@ -13,7 +13,7 @@ class MultiDiscrete(gym.Space):
     - It is useful to represent game controllers or keyboards where each key can be represented as a discrete action space
     - It is parametrized by passing an array of arrays containing [min, max] for each discrete action space
        where the discrete action space can take any integers from `min` to `max` (both inclusive)
-    Note: A value of 0 always need to represent the NOOP action.
+    No_te: A value of 0 always need to represent the NOOP action.
     e.g. Nintendo Game Controller
     - Can be conceptualized as 3 discrete action spaces:
         1) Arrow Keys: Discrete 5  - NOOP[0], UP[1], RIGHT[2], DOWN[3], LEFT[4]  - params: min: 0, max: 4

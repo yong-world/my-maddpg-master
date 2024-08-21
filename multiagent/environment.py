@@ -28,7 +28,7 @@ class MultiAgentEnv(gym.Env):
         # environment parameters
         self.discrete_action_space = True   # TODO 动作空间为何默认是离散，而且没有修改
         # if true, action is a number 0...N, otherwise action is a one-hot N-dimensional vector
-        self.discrete_action_input = False
+        self.discrete_action_input = False  # 动作输入是离散的，但是动作空间不是，好奇怪
         # if true, even the action is continuous, action will be performed discretely
         # 判断是否有参数离散动作，但是我看没有哪个其它文件里有discrete_action这个东西
         self.force_discrete_action = world.discrete_action if hasattr(world, 'discrete_action') else False
@@ -182,14 +182,14 @@ class MultiAgentEnv(gym.Env):
                     agent.action.u = action[0]
             sensitivity = 5.0   # TODO sensitivity是什么？
             if agent.accel is not None:
-                sensitivity = agent.accel
+                sensitivity = agent.accel  # 3
             agent.action.u *= sensitivity
             action = action[1:]
         if not agent.silent:
             # communication action
-            if self.discrete_action_input:
+            if self.discrete_action_input:  # 默认false不进去
                 agent.action.c = np.zeros(self.world.dim_c)
-                agent.action.c[action[0]] = 1.0
+                agent.action.c[action[0]] = 1.0  # TODO 这一步有问题action[0]是一个列表，而且十个float列表
             else:
                 agent.action.c = action[0]
             action = action[1:]
