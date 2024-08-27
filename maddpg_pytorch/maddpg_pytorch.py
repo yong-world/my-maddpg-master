@@ -82,7 +82,7 @@ class MADDPGAgentTrainer(AgentTrainer):
         q_loss = torch.mean(torch.square(q_val - y))
         q_reg = torch.mean(torch.square(q_val))
         loss = q_loss  # + 1e-3 * q_reg
-        print('qtrainloss:{}'.format(q_loss))
+        # print('qtrainloss:{}'.format(q_loss))
         self.q_optimizer.zero_grad()
         loss.backward()
 
@@ -106,7 +106,7 @@ class MADDPGAgentTrainer(AgentTrainer):
         q_loss = -torch.mean(self.q(batch_input))
         p_reg = torch.mean(torch.square(act_output))
         loss = q_loss + p_reg * 1e-3
-        print('ptrainqloss:{}\tp_reg:{}'.format(q_loss, p_reg))
+        # print('ptrainqloss:{}\tp_reg:{}'.format(q_loss, p_reg))
         self.p_optimizer.zero_grad()
         loss.backward()
         if grad_norm_clipping is not None:

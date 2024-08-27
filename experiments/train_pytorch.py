@@ -31,7 +31,7 @@ def parse_args():
     parser.add_argument("--num-units", type=int, default=64, help="number of units in the mlp")
     # Checkpointing
     parser.add_argument("--exp-name", type=str, default="exp1", help="name of the experiment")
-    parser.add_argument("--save-dir", type=str, default="/tmp/policy/", help="directory in which training "
+    parser.add_argument("--save-dir", type=str, default="./model_save/TH/", help="directory in which training "
                                                                              "state and model should be saved")
     parser.add_argument("--save-rate", type=int, default=1000, help="save model once every time this many "
                                                                     "episodes are completed")
@@ -101,10 +101,10 @@ def get_trainers(env, num_adversaries, obs_shape_n, arglist, device):
     return trainers
 
 
-def easy_plot(data_input, title, x_label, y_label, file_name, marker=None):
+def easy_plot(data_input, title, x_label, y_label, file_name, time_str,marker=None):
     plt.plot(range(1, len(data_input) + 1), data_input, linewidth='0.5', marker=marker)
-    now_time = datetime.datetime.now()
-    time_str = now_time.strftime('%Y%m%d_%H%M%S')
+    # now_time = datetime.datetime.now()
+    # time_str = now_time.strftime('%Y%m%d_%H%M%S')
     png_folder_dir = arglist.learning_curves_figure_dir
     png_dir = arglist.learning_curves_figure_dir + file_name + '_' + 'TH' + str(
         arglist.num_episodes) + '_' + arglist.exp_name + '_' + time_str + '.png'
@@ -157,7 +157,7 @@ def train(arglist):
     log_file_name = arglist.log_dir + 'TH' + '_' + arglist.exp_name + '_' + 'log.txt'
     with open(log_file_name, 'a') as fp:
         now_time = datetime.datetime.now()
-        time_str = now_time.strftime('%Y%m%d  %H:%M:%S')
+        time_str = now_time.strftime('%Y_%m_%d  %H:%M:%S')
         fp.write('-----------------------------------------------------------------------------------------\n'
                  + 'Starting iterations : {}\n'.format(time_str))
         fp.write('scenario:{}\t'.format(str(arglist.scenario)))
@@ -257,13 +257,13 @@ def train(arglist):
             print('...Finished total of {} episodes.'.format(len(episode_rewards)))
             # 绘图
             easy_plot(data_input=episode_rewards, title='TH_mean_episode_rewards:{}'.format(np.mean(episode_rewards)),
-                      x_label='episode', y_label='rewards', file_name='EpisodeRewards')
+                      x_label='episode', y_label='rewards', file_name='EpisodeRewards',time_str=time_str)
             easy_plot(data_input=final_ep_rewards, title='TH_Every1000rewards', x_label='episode',
-                      y_label='rewards', file_name='Every1000Rewards', marker='.')
+                      y_label='rewards', file_name='Every1000Rewards',time_str=time_str, marker='.')
             with open(log_file_name, 'a') as fp:
                 fp.write('mean rewards:{}\n'.format(str(np.mean(episode_rewards))))
                 fp.write(
-                    'End iterations\n' + '-----------------------------------------------------------------------------------------\n')
+                    'End iterations\n'+str(datetime.datetime.now().strftime('%Y_%m_%d  %H:%M:%S'))+'\n')
             # while True:
             #     if keyboard.is_pressed('esc'):
             #         break

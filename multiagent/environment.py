@@ -28,7 +28,7 @@ class MultiAgentEnv(gym.Env):
         # environment parameters
         self.discrete_action_space = True   # TODO 动作空间为何默认是离散，而且没有修改
         # if true, action is a number 0...N, otherwise action is a one-hot N-dimensional vector
-        self.discrete_action_input = False  # 动作输入是离散的，但是动作空间不是，好奇怪
+        self.discrete_action_input = False
         # if true, even the action is continuous, action will be performed discretely
         # 判断是否有参数离散动作，但是我看没有哪个其它文件里有discrete_action这个东西
         self.force_discrete_action = world.discrete_action if hasattr(world, 'discrete_action') else False
