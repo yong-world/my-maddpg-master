@@ -35,11 +35,11 @@ def parse_args():
                                                                              "state and model should be saved")
     parser.add_argument("--save-rate", type=int, default=1000, help="save model once every time this many "
                                                                     "episodes are completed")
-    parser.add_argument("--load-dir", type=str, default="", help="directory in which training state and "
-                                                                 "model are loaded")
+    parser.add_argument("--load-dir", type=str, default="./model_save/MADDPG/TH/", help="directory in which"
+                                                                                        " training state and model are loaded")
     # Evaluation
     parser.add_argument("--restore", action="store_true", default=False)
-    parser.add_argument("--display", action="store_true", default=False)
+    parser.add_argument("--display", action="store_true", default=True)
     parser.add_argument("--benchmark", action="store_true", default=False)
     parser.add_argument("--benchmark-iters", type=int, default=1000, help="number of iterations run for benchmarking")
     parser.add_argument("--benchmark-dir", type=str, default="./benchmark_files/", help="directory where "
@@ -68,10 +68,12 @@ class mlp_model(nn.Module):
 
 
 def load_state(load_dir, trainers):
-    """Load all the variables from the location <load_dir>"""
-    checkpoint = torch.load(os.path.join(load_dir, "model.pt"))
-    trainers[:] = checkpoint['trainers']
-    print(f"Model loaded from {load_dir}")
+    tobe_load_models = torch.load(load_dir)['trainers']
+    for i in range(len(trainers)):
+        trainers[i].p = tobe_load_models[i][0]
+        trainers[i].target_p = tobe_load_models[i][1]
+        trainers[i].q = tobe_load_models[i][2]
+        trainers[i].target_q = tobe_load_models[i][3]
 
 
 def make_env(scenario_name, arglist, benchmark=False):
@@ -137,7 +139,8 @@ def train(arglist):
         arglist.load_dir = arglist.save_dir
     if arglist.display or arglist.restore or arglist.benchmark:  # 用torch加载模型
         print('Loading previous state')
-        load_state(arglist.load_dir, trainers)
+        load_state(arglist.load_dir+'exp1pytorch_model.pt',trainers)
+        # load_state(arglist.load_dir, trainers)
 
     episode_rewards = [0.0]
     agent_rewards = [[0.0] for _ in range(env.n)]
@@ -157,7 +160,7 @@ def train(arglist):
     log_file_name = arglist.log_dir + 'TH' + '_' + arglist.exp_name + '_' + 'log.txt'
     with open(log_file_name, 'a') as fp:
         now_time = datetime.datetime.now()
-        time_str = now_time.strftime('%Y_%m_%d  %H:%M:%S')
+        time_str = now_time.strftime('%Y_%m_%d___%H_%M_%S')
         fp.write('-----------------------------------------------------------------------------------------\n'
                  + 'Starting iterations : {}\n'.format(time_str))
         fp.write('scenario:{}\t'.format(str(arglist.scenario)))
@@ -209,7 +212,7 @@ def train(arglist):
             continue
 
         if arglist.display:
-            time.sleep(0.1)
+            time.sleep(0.15)
             env.render()
             continue
 
@@ -222,9 +225,8 @@ def train(arglist):
         if terminal and (len(episode_rewards) % arglist.save_rate == 0):
             save_path = os.path.join(arglist.save_dir, arglist.exp_name + "pytorch_model.pt")
             # torch.save({'trainers': trainers}, save_path)
-            torch.save({'trainers': [(trainers[i].p, trainers[i].target_p, trainers[i].q, trainers[i].target_q) for i in
+            torch.save({'trainers': [[trainers[i].p, trainers[i].target_p, trainers[i].q, trainers[i].target_q] for i in
                 range(trainers[0].n)]}, save_path)
-            # print(f"Model saved to {save_path}")
 
             if num_adversaries == 0:
                 output = "steps: {}, episodes: {}, mean episode reward: {}, time: {}".format(

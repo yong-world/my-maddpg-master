@@ -19,7 +19,7 @@ def parse_args():
     # Environment
     parser.add_argument("--scenario", type=str, default="simple_world_comm", help="name of the scenario script")
     parser.add_argument("--max-episode-len", type=int, default=25, help="maximum episode length")
-    parser.add_argument("--num-episodes", type=int, default=30000, help="number of episodes")
+    parser.add_argument("--num-episodes", type=int, default=60000, help="number of episodes")
     # parser.add_argument("--num-episodes", type=int, default=200, help="number of episodes")
     parser.add_argument("--num-adversaries", type=int, default=0, help="number of adversaries")  # 只有需要
     # 指定为DDPG算法时才需要确定这个
@@ -40,7 +40,7 @@ def parse_args():
                                                                  "model are loaded")
     # Evaluation
     parser.add_argument("--restore", action="store_true", default=False)
-    parser.add_argument("--display", action="store_true", default=False)
+    parser.add_argument("--display", action="store_true", default=True)
     parser.add_argument("--benchmark", action="store_true", default=False)
     parser.add_argument("--benchmark-iters", type=int, default=1000, help="number of iterations run for benchmarking")
     parser.add_argument("--benchmark-dir", type=str, default="./benchmark_files/", help="directory where "
@@ -154,7 +154,7 @@ def train(arglist):
         log_file_name = arglist.log_dir + 'TF' + '_' + arglist.exp_name + '_' + 'log.txt'
         with open(log_file_name, 'a') as fp:
             now_time = datetime.datetime.now()
-            time_str = now_time.strftime('%Y_%m_%d  %H:%M:%S')
+            time_str = now_time.strftime('%Y_%m_%d___%H_%M_%S')
             fp.write('-----------------------------------------------------------------------------------------\n'
                 +'Starting iterations : {}\n'.format(time_str))
             fp.write('scenario:{}\t'.format(str(arglist.scenario)))

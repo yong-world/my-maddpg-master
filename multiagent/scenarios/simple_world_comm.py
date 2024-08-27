@@ -235,7 +235,7 @@ class Scenario(BaseScenario):
         in_forest = [np.array([-1]), np.array([-1])]
         inf1 = False
         inf2 = False
-        if self.is_collision(agent, world.forests[0]):  # TODO 可以改成遍历森林
+        if self.is_collision(agent, world.forests[0]):
             in_forest[0] = np.array([1])
             inf1= True
         if self.is_collision(agent, world.forests[1]):

@@ -203,19 +203,20 @@ class MultiAgentEnv(gym.Env):
 
     # render environment
     def render(self, mode='human'):  # 输出通信消息(通信消息是发给所有人)，当slent=False时发出的消息就是空的
-        if mode == 'human':
-            alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
-            message = ''
-            for agent in self.world.agents:
-                comm = []
-                for other in self.world.agents:
-                    if other is agent: continue
-                    if np.all(other.state.c == 0):
-                        word = '_'
-                    else:
-                        word = alphabet[np.argmax(other.state.c)]
-                    message += (other.name + ' to ' + agent.name + ': ' + word + '   ')
-            print(message)
+        # NOTE 通信的表达就是取通信信息的最大值作为字母表的索引，暂时不用
+        # if mode == 'human':
+        #     alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
+        #     message = ''
+        #     for agent in self.world.agents:
+        #         comm = []
+        #         for other in self.world.agents:
+        #             if other is agent: continue
+        #             if np.all(other.state.c == 0):
+        #                 word = '_'
+        #             else:
+        #                 word = alphabet[np.argmax(other.state.c)]
+        #             message += (other.name + ' to ' + agent.name + ': ' + word + '   ')
+        #     print(message)
 
         for i in range(len(self.viewers)):
             # create viewers (if necessary)
