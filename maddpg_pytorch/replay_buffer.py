@@ -22,8 +22,8 @@ class ReplayBuffer(object):
         self._storage = []
         self._next_idx = 0
 
-    def add(self, obs_t, action, reward, obs_tp1, done):
-        data = (obs_t, action, reward, obs_tp1, done)
+    def add(self, obs_t, action, reward, obs_tp1):
+        data = [obs_t, action, reward, obs_tp1]
 
         if self._next_idx >= len(self._storage):
             self._storage.append(data)
@@ -32,16 +32,15 @@ class ReplayBuffer(object):
         self._next_idx = (self._next_idx + 1) % self._maxsize
 
     def _encode_sample(self, idxes):
-        obses_t, actions, rewards, obses_tp1, dones = [], [], [], [], []
+        obses_t, actions, rewards, obses_tp1 = [], [], [], []
         for i in idxes:
             data = self._storage[i]
-            obs_t, action, reward, obs_tp1, done = data
+            obs_t, action, reward, obs_tp1 = data
             obses_t.append(obs_t)  # 不用深拷贝而是引用来加快速度节省资源
             actions.append(action)
             rewards.append(reward)
             obses_tp1.append(obs_tp1)
-            dones.append(done)
-        return np.array(obses_t), np.array(actions), np.array(rewards), np.array(obses_tp1), np.array(dones)
+        return obses_t, actions, rewards, obses_tp1
 
     def make_index(self, batch_size):
         return [random.randint(0, len(self._storage) - 1) for _ in range(batch_size)]  # 因为左闭右开，减1的话其实是少了最后一个的抽取可能
@@ -55,27 +54,7 @@ class ReplayBuffer(object):
         return self._encode_sample(idxes)
 
     def sample(self, batch_size):
-        """Sample a batch of experiences.
-
-        Parameters
-        ----------
-        batch_size: int
-            How many transitions to sample.
-
-        Returns
-        -------
-        obs_batch: np.array
-            batch of observations
-        act_batch: np.array
-            batch of actions executed given obs_batch
-        rew_batch: np.array
-            rewards received as results of executing act_batch
-        next_obs_batch: np.array
-            next set of observations seen after executing act_batch
-        done_mask: np.array
-            done_mask[i] = 1 if executing act_batch[i] resulted in
-            the end of an episode and 0 otherwise.
-        """
+        #Sample a batch of experiences.
         if batch_size > 0:
             idxes = self.make_index(batch_size)
         else:

@@ -1,25 +1,30 @@
+from __future__ import absolute_import
+from __future__ import division
+from __future__ import print_function
 import argparse
 import os
+import sys
 import time
 import pickle
 import matplotlib.pyplot as plt
 import torch
 import torch.nn as nn
-import torch.optim as optim
 import datetime
 import numpy as np
-from maddpg_pytorch.maddpg_pytorch import MADDPGAgentTrainer
-from multiagent.environment import MultiAgentEnv
-import multiagent.scenarios as scenarios
+from gym import spaces
+from maddpg_pytorch.maddpg_pytorch import MADDPGAgentTrainer, vae_train
 
+from smac.env import StarCraft2Env
+from absl import logging
 
-# improve volatile模式，gpu模式
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
 
 def parse_args():
     parser = argparse.ArgumentParser("Reinforcement Learning experiments for multiagent environments")
     # Environment
-    parser.add_argument("--scenario", type=str, default="simple_world_comm", help="name of the scenario script")
-    parser.add_argument("--max-episode-len", type=int, default=25, help="maximum episode length")
+    parser.add_argument("--scenario", type=str, default="3m", help="name of the scenario script")
+    parser.add_argument("--max-episode-len", type=int, default=60, help="maximum episode length")
     parser.add_argument("--num-episodes", type=int, default=60000, help="number of episodes")
     parser.add_argument("--num-adversaries", type=int, default=0, help="number of adversaries")
     parser.add_argument("--good-policy", type=str, default="maddpg", help="policy for good agents")
@@ -32,14 +37,14 @@ def parse_args():
     # Checkpointing
     parser.add_argument("--exp-name", type=str, default="exp1", help="name of the experiment")
     parser.add_argument("--save-dir", type=str, default="./model_save/TH/", help="directory in which training "
-                                                                             "state and model should be saved")
+                                                                                 "state and model should be saved")
     parser.add_argument("--save-rate", type=int, default=1000, help="save model once every time this many "
                                                                     "episodes are completed")
     parser.add_argument("--load-dir", type=str, default="./model_save/MADDPG/TH/", help="directory in which"
                                                                                         " training state and model are loaded")
     # Evaluation
     parser.add_argument("--restore", action="store_true", default=False)
-    parser.add_argument("--display", action="store_true", default=True)
+    parser.add_argument("--display", action="store_true", default=False)
     parser.add_argument("--benchmark", action="store_true", default=False)
     parser.add_argument("--benchmark-iters", type=int, default=1000, help="number of iterations run for benchmarking")
     parser.add_argument("--benchmark-dir", type=str, default="./benchmark_files/", help="directory where "
@@ -49,6 +54,7 @@ def parse_args():
     parser.add_argument("--learning-curves-figure-dir", type=str, default="./learning_curves_figure/",
                         help="learning_curves_figure_directory")
     parser.add_argument("--log-dir", type=str, default="./Logs/", help="log directory")
+    parser.add_argument("--log-head", type=str, default="./MADDPG_SMAC/", help="all log head")
     return parser.parse_args()
 
 
@@ -67,6 +73,48 @@ class mlp_model(nn.Module):
         return x
 
 
+def get_time():
+    return str(datetime.datetime.now().strftime('%m%d_%H%M'))
+
+
+def save_all_data(env, arglist, episode_rewards, final_ep_rewards, log, trainers):
+    # 创建路径
+    exp_dir = arglist.log_head + '{}T：{}E：{}/'.format(arglist.scenario, get_time(), arglist.num_episodes)
+    if not os.path.exists(exp_dir):
+        os.makedirs(exp_dir)
+        print("{} created".format(exp_dir))
+    # 保存奖励、胜率对象
+    total_win_rate = env.battles_won / env.battles_game
+    episode_rewards_1000rewards_winrate = exp_dir + 'episode_rewards_1000rewards_winrate.pkl'
+    with open(episode_rewards_1000rewards_winrate, 'wb') as fp:
+        pickle.dump([episode_rewards, final_ep_rewards, total_win_rate], fp)
+
+    # 绘图并保存
+    mean_reward = np.mean(episode_rewards)
+    plot_save(data_input=episode_rewards,
+              title='mean rewards:{} win_rate:{}'.format(mean_reward, total_win_rate),
+              x_label='episode', y_label='reward', png_dir=exp_dir + 'total_rewards.png')
+    plot_save(data_input=final_ep_rewards,
+              title='rewards:{} win_rate:{}'.format(mean_reward, total_win_rate),
+              x_label='episode',
+              y_label='reward', png_dir=exp_dir + 'sample_rewards.png', marker='.')
+
+    # 保存训练记录
+    log.append(
+        'mean rewards:{}\n'.format(str(np.mean(episode_rewards))) + 'total_won_rate:{}'.format(total_win_rate))
+    log.append('End iterations\n' + '\n')
+    with open(exp_dir + 'train_log.txt', 'w+') as fp:
+        for log_line in log:
+            fp.write(str(log_line))
+    with open(exp_dir + 'episode_reward.txt', 'w+') as fp:
+        for episode_reward in episode_rewards:
+            fp.write(str(episode_reward))
+    # 保存模型
+    save_path = os.path.join(arglist.save_dir, arglist.exp_name + "pytorch_model.pt")
+    torch.save({'trainers': [[trainers[i].p, trainers[i].target_p, trainers[i].q, trainers[i].target_q] for i in
+                             range(trainers[0].n)]}, save_path)
+
+
 def load_state(load_dir, trainers):
     tobe_load_models = torch.load(load_dir)['trainers']
     for i in range(len(trainers)):
@@ -76,200 +124,163 @@ def load_state(load_dir, trainers):
         trainers[i].target_q = tobe_load_models[i][3]
 
 
-def make_env(scenario_name, arglist, benchmark=False):
-    scenario = scenarios.load(scenario_name + ".py").Scenario()
-    world = scenario.make_world()
+def make_env(map_name):
+    """
+    创建环境，返回环境和每个agent的动作空间、观察空间，目前是同构的,返回累计动作、观察空间
+    Returns
+    -------
+    env,action_space,obs_space
+    """
+    env = StarCraft2Env(map_name=map_name)
+    env_info = env.get_env_info()
+    action_space = env_info['n_actions']
+    obs_space = env_info['obs_shape']
+    action_space_n = []
+    observation_space_n = []
+    for agent in range(env_info['n_agents']):
+        d_action_space = spaces.Discrete(action_space)
+        b_observation_space = spaces.Box(low=-np.inf, high=+np.inf, shape=(obs_space,), dtype=np.float32)
+        action_space_n.append(d_action_space)
+        observation_space_n.append(b_observation_space)
+    act_space_acc = action_space * env_info['n_agents']
+    obs_space_acc = obs_space * env_info['n_agents']
+    obs_n, state = env.reset()
+    obs_n = np.array(obs_n)
+    obs_n = torch.from_numpy(obs_n).to(device)
+    return env, env_info, action_space_n, observation_space_n, act_space_acc, obs_space_acc, obs_n
 
-    if benchmark:
-        env = MultiAgentEnv(world, scenario.reset_world, scenario.reward, scenario.observation, scenario.benchmark_data)
-    else:
-        env = MultiAgentEnv(world, scenario.reset_world, scenario.reward, scenario.observation)
-    return env
 
-
-def get_trainers(env, num_adversaries, obs_shape_n, arglist, device):
+def get_trainers(env, n_agent, obs_space_n, act_space_n, arglist, device):
     trainers = []
     model = mlp_model
     trainer = MADDPGAgentTrainer
-    for i in range(num_adversaries):
-        # action_space是根据动作维度和通信维度得到的box、discrete
-        trainers.append(trainer(
-            "agent_%d" % i, model, obs_shape_n, env.action_space, i, arglist,
-            local_q_func=(arglist.adv_policy == 'ddpg'), device=device))
-    for i in range(num_adversaries, env.n):
-        trainers.append(trainer(
-            "agent_%d" % i, model, obs_shape_n, env.action_space, i, arglist,
-            local_q_func=(arglist.good_policy == 'ddpg'), device=device))
+    for i in range(env.get_env_info()['n_agents']):
+        trainers.append(
+            trainer(name="agent_%d" % i, model=model, obs_shape_n=obs_space_n, act_space_n=act_space_n, agent_index=i,
+                    args=arglist, device=device, team_num=n_agent))
     return trainers
 
 
-def easy_plot(data_input, title, x_label, y_label, file_name, time_str,marker=None):
+def act_mask_max(action_n, env):
+    indices = []
+    avail_agent_actions = [env.get_avail_agent_actions(i) for i in range(env.n_agents)]
+    avail_agent_actions_tensor = torch.tensor(avail_agent_actions).to(device)
+    for tensor, mask in zip(action_n, avail_agent_actions_tensor):
+        masked_tensor = tensor * mask
+        # 找到最大值的索引
+        max_index = torch.argmax(masked_tensor)
+        indices.append(max_index.item())
+    return indices
+
+
+def plot_save(data_input, title, x_label, y_label, png_dir, marker=None):
     plt.plot(range(1, len(data_input) + 1), data_input, linewidth='0.5', marker=marker)
-    # now_time = datetime.datetime.now()
-    # time_str = now_time.strftime('%Y%m%d_%H%M%S')
-    png_folder_dir = arglist.learning_curves_figure_dir
-    png_dir = arglist.learning_curves_figure_dir + file_name + '_' + 'TH' + str(
-        arglist.num_episodes) + '_' + arglist.exp_name + '_' + time_str + '.png'
     plt.title(title)
     plt.xlabel(x_label)
     plt.ylabel(y_label)
     plt.grid()
-    if not os.path.exists(png_folder_dir):
-        os.makedirs(png_folder_dir)
-        print("Folder created")
     plt.savefig(png_dir)
-    print("File saved to:", png_dir)
+    print("figure saved to:", png_dir)
     plt.show()
 
 
 def train(arglist):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
     # Create environment
-    env = make_env(arglist.scenario, arglist, arglist.benchmark)
-
+    env, env_info, act_space_n, obs_space_n, act_space_acc, obs_space_acc, obs_n = make_env(arglist.scenario)
     # Create agent trainers
-    obs_shape_n = [env.observation_space[i].shape[0] for i in range(env.n)]
-    num_adversaries = min(env.n, arglist.num_adversaries)  # env.n是策略个体数，arglist.num_adversaries默认是0，辅助指定ddpg个数
-    trainers = get_trainers(env, num_adversaries, obs_shape_n, arglist, device)
+    trainers = get_trainers(env, env_info['n_agents'], obs_space_n, act_space_n, arglist, device)
     print('Using good policy {} and adv policy {}'.format(arglist.good_policy, arglist.adv_policy))
-
+    num_adversaries = arglist.num_adversaries
     # Load previous results, if necessary
     if arglist.load_dir == "":
         arglist.load_dir = arglist.save_dir
     if arglist.display or arglist.restore or arglist.benchmark:  # 用torch加载模型
         print('Loading previous state')
-        load_state(arglist.load_dir+'exp1pytorch_model.pt',trainers)
-        # load_state(arglist.load_dir, trainers)
-
+        load_state(arglist.load_dir + 'exp1pytorch_model.pt', trainers)
+    log = []
     episode_rewards = [0.0]
-    agent_rewards = [[0.0] for _ in range(env.n)]
+    episode_num = 0
+    episode_win_lose = []
     final_ep_rewards = []
-    final_ep_ag_rewards = []
     agent_info = [[[]]]
-    obs_n = env.reset()
     episode_step = 0
     train_step = 0
-    t_start = time.time()
+    episode1000_start = time.time()
 
     print('Starting iterations...')
-    print('scenario:{}\tnum-episodes:{}\tbatch-size:{}\tsave-rates:{}\tlr:{}'.format(arglist.scenario,
-                                                                                     arglist.num_episodes,
-                                                                                     arglist.batch_size,
-                                                                                     arglist.save_rate, arglist.lr))
-    log_file_name = arglist.log_dir + 'TH' + '_' + arglist.exp_name + '_' + 'log.txt'
-    with open(log_file_name, 'a') as fp:
-        now_time = datetime.datetime.now()
-        time_str = now_time.strftime('%Y_%m_%d___%H_%M_%S')
-        fp.write('-----------------------------------------------------------------------------------------\n'
-                 + 'Starting iterations : {}\n'.format(time_str))
-        fp.write('scenario:{}\t'.format(str(arglist.scenario)))
-        fp.write('num-episodes:{}\t'.format(str(arglist.num_episodes)))
-        fp.write('batch-size:{}\t'.format(str(arglist.batch_size)))
-        fp.write('save-rates:{}\t'.format(str(arglist.save_rate)))
-        fp.write('lr:{}\t'.format(str(arglist.lr)))
-        fp.write('comm-channels:{}\n'.format(str(env.world.dim_c)))
+    train_info = ('scenario:{}\tnum-episodes:{}\tbatch-size:{}\t'
+                  'save-rates:{}\tlr:{}').format(arglist.scenario, arglist.num_episodes, arglist.batch_size,
+                                                   arglist.save_rate, arglist.lr)
+    print(train_info+'\n')
+    log.append('-----------------------------------------------------------------------------------------')
+    log.append('Starting iterations : {}'.format(get_time()))
+    log.append(train_info)
+
     while True:
         action_n = [agent.action(obs) for agent, obs in zip(trainers, obs_n)]
-        # done由于构建环境的时候没有传入done，所以传回都是false，并没有使用
-        new_obs_n, rew_n, done_n, info_n = env.step(action_n)
-        episode_step += 1
-        done = all(done_n)
-        terminal = (episode_step >= arglist.max_episode_len)
+        # 获取环境输出的reward, terminated, info_n，rew_n，new_obs_n，action_n
+        action_n_index = act_mask_max(action_n, env)
+        reward, terminated, info_n = env.step(action_n_index)
+        rew_n = [[reward] for _ in range(env.n_agents)]
+        new_obs_n = env.get_obs()
 
+        # 每轮里的每步奖励累加
+        for i, rew in enumerate(rew_n):
+            episode_rewards[-1] += rew[0]
+        episode_step += 1
+
+        # 转换成tensor， L*L转L*T,L*N转L*T,因为action本来就是L*T就不用
+        rew_n = torch.tensor(rew_n).to(device)
+        new_obs_n = np.array(new_obs_n, copy=False)
+        new_obs_n = torch.from_numpy(new_obs_n).to(device)
         for i, agent in enumerate(trainers):
-            agent.experience(np.array(obs_n[i], dtype=np.float32, copy=False),
-                             np.array(action_n[i], dtype=np.float32, copy=False),
-                             np.array(rew_n[i], dtype=np.float32, copy=False),
-                             np.array(new_obs_n[i], dtype=np.float32, copy=False),
-                             np.array(done_n[i], dtype=np.float32, copy=False),
-                             np.array(terminal, dtype=np.float32, copy=False))
+            agent.experience(obs_n[i], action_n[i], rew_n[i], new_obs_n[i])
         obs_n = new_obs_n
 
-        for i, rew in enumerate(rew_n):
-            episode_rewards[-1] += rew
-            agent_rewards[i][-1] += rew
-
-        if done or terminal:
-            obs_n = env.reset()
-            episode_step = 0
+        # 一轮结束后重置环境、代内步和奖励，收集胜利/失败信息
+        if terminated:
+            obs_n, state = env.reset()
+            obs_n = np.array(obs_n)
+            obs_n = torch.from_numpy(obs_n).to(device)
+            episode_step = 1
             episode_rewards.append(0)
-            for a in agent_rewards:
-                a.append(0)
-            agent_info.append([[]])
-
+            sys.stdout.write("\repsiode:{}".format(episode_num))
+            sys.stdout.flush()
+            episode_num += 1
+            if info_n == {}:
+                episode_win_lose.append(0)
+            else:
+                if info_n['battle_won']:
+                    episode_win_lose.append(1)
+                else:
+                    episode_win_lose.append(0)
         train_step += 1
 
-        if arglist.benchmark:
-            for i, info in enumerate(info_n):
-                agent_info[-1][i].append(info_n['n'])
-            if train_step > arglist.benchmark_iters and (done or terminal):
-                file_name = arglist.benchmark_dir + arglist.exp_name + '.pkl'
-                print('Finished benchmarking, now saving...')
-                with open(file_name, 'wb') as fp:
-                    pickle.dump(agent_info[:-1], fp)
-                break
-            continue
+        # vae 和p、q训练比例 1:3
+        if len(trainers[0].replay_buffer) > trainers[0].max_replay_buffer_len and train_step % 400 == 0:
+            vae_train(trainers=trainers)
+        else:
+            for agent in trainers:
+                loss = agent.update(trainers, train_step)
 
-        if arglist.display:
-            time.sleep(0.15)
-            env.render()
-            continue
-
-        loss = None
-        for agent in trainers:
-            agent.preupdate()
-        for agent in trainers:
-            loss = agent.update(trainers, train_step)
         # 每save_rate(1000)轮保存模型,输出训练信息
-        if terminal and (len(episode_rewards) % arglist.save_rate == 0):
-            save_path = os.path.join(arglist.save_dir, arglist.exp_name + "pytorch_model.pt")
-            # torch.save({'trainers': trainers}, save_path)
-            torch.save({'trainers': [[trainers[i].p, trainers[i].target_p, trainers[i].q, trainers[i].target_q] for i in
-                range(trainers[0].n)]}, save_path)
-
-            if num_adversaries == 0:
-                output = "steps: {}, episodes: {}, mean episode reward: {}, time: {}".format(
-                    train_step, len(episode_rewards), np.mean(episode_rewards[-arglist.save_rate:]),
-                    round(time.time() - t_start, 3))
-                print(output)
-                with open(log_file_name, 'a') as fp:
-                    fp.write(output + '\n')
-            else:
-                output = "steps: {}, episodes: {}, mean episode reward: {}, agent episode reward: {}, time: {}".format(
-                    train_step, len(episode_rewards), np.mean(episode_rewards[-arglist.save_rate:]),
-                    [np.mean(rew[-arglist.save_rate:]) for rew in agent_rewards], round(time.time() - t_start, 3))
-                print(output)
-                with open(log_file_name, 'a') as fp:
-                    fp.write(output + '\n')
-            t_start = time.time()
-            # Keep track of final episode reward 最后一千轮的总奖励和agent奖励
+        if terminated and (episode_num % arglist.save_rate == 0):
+            # 输出最近一千轮信息
+            output = "\rsteps: {}, episodes: {}, mean episode reward: {}, won_rate: {} time: {}".format(
+                train_step, len(episode_rewards), np.mean(episode_rewards[-arglist.save_rate:]),
+                np.mean(episode_win_lose[-arglist.save_rate:]), round(time.time() - episode1000_start, 3))
+            # 最近一千轮的平均奖励
             final_ep_rewards.append(np.mean(episode_rewards[-arglist.save_rate:]))
-            for rew in agent_rewards:
-                final_ep_ag_rewards.append(np.mean(rew[-arglist.save_rate:]))
+            print(output)
+            log.append(output)
+            episode1000_start = time.time()
 
-        # EpisodeRewards和Every1000Rewards信息，绘图输出
-        if len(episode_rewards) > arglist.num_episodes:
-            rew_file_name = arglist.plots_dir + arglist.exp_name + '_rewards.pkl'
-            with open(rew_file_name, 'wb') as fp:
-                pickle.dump(final_ep_rewards, fp)
-            agrew_file_name = arglist.plots_dir + arglist.exp_name + '_agrewards.pkl'
-            with open(agrew_file_name, 'wb') as fp:
-                pickle.dump(final_ep_ag_rewards, fp)
+        # 保存信息
+        if episode_num > arglist.num_episodes:
             print('...Finished total of {} episodes.'.format(len(episode_rewards)))
-            # 绘图
-            easy_plot(data_input=episode_rewards, title='TH_mean_episode_rewards:{}'.format(np.mean(episode_rewards)),
-                      x_label='episode', y_label='rewards', file_name='EpisodeRewards',time_str=time_str)
-            easy_plot(data_input=final_ep_rewards, title='TH_Every1000rewards', x_label='episode',
-                      y_label='rewards', file_name='Every1000Rewards',time_str=time_str, marker='.')
-            with open(log_file_name, 'a') as fp:
-                fp.write('mean rewards:{}\n'.format(str(np.mean(episode_rewards))))
-                fp.write(
-                    'End iterations\n'+str(datetime.datetime.now().strftime('%Y_%m_%d  %H:%M:%S'))+'\n')
-            # while True:
-            #     if keyboard.is_pressed('esc'):
-            #         break
-            #     time.sleep(0.1)
+            save_all_data(env=env, arglist=arglist, episode_rewards=episode_rewards, final_ep_rewards=final_ep_rewards,
+                          log=log, trainers=trainers)
             break
 
 
@@ -280,3 +291,12 @@ if __name__ == '__main__':
         print("Folder created")
     for i in range(1):
         train(arglist)
+
+    # loaded_data = []
+    # with open('data.pkl', 'rb') as file:
+    #     while True:
+    #         try:
+    #             data = pickle.load(file)
+    #             loaded_data.append(data)
+    #         except EOFError:
+    #             break

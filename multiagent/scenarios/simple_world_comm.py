@@ -154,7 +154,7 @@ class Scenario(BaseScenario):
 
     def agent_reward(self, agent, world):
         # Agents are rewarded based on minimum agent distance to each landmark
-        # 碰撞-5，接近边界惩罚0.9-1.0时-2(x - 0.9) * 10，>1.0时-2*min(exp(2(x-1)),10),碰撞食物时+2,0.05与最近食物的距离
+        # 碰撞-5，接近边界惩罚0.9-1.0时-2(x - 0.9) * 10，>1.0时-2*min(exp(2(x-1)),10),碰撞食物时+2,0.05乘与最近食物的距离奖励
         rew = 0
         shape = False
         adversaries = self.adversaries(world)

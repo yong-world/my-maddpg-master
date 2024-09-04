@@ -7,17 +7,43 @@ import torch.optim as optim
 from maddpg import AgentTrainer
 from maddpg_pytorch.replay_buffer import ReplayBuffer
 from maddpg_pytorch.distributions_pytorch import make_pdtype
+from maddpg_pytorch.vae import VAE, vae_loss
+
+
+def vae_train(trainers):
+    vae_obs_n, vae_obs_next_n, vae_act_n, vae_obs, vae_act, vae_rew, vae_obs_next = trainers[
+        0].sample_from_replay(trainers)
+    loss = []
+    n_agents=len(trainers)
+    for i in range(n_agents):
+        teammate_obs = [vae_obs_n[j] for j in range(n_agents) if j != i]
+        teammate_obs = torch.cat(teammate_obs, -1)
+        teammate_act = [vae_act_n[j] for j in range(n_agents) if j != i]
+        teammate_act = torch.cat(teammate_act, -1)
+        recon_obs, recon_action, mu, log_var = trainers[i].vae(vae_obs_n[i])
+        agent_i_vae_loss = vae_loss(recon_obs=recon_obs, recon_action=recon_action, obs=teammate_obs,
+                                    action=teammate_act, mu=mu, log_var=log_var)
+        loss.append(agent_i_vae_loss.item())
+        trainers[i].vae_optimizer.zero_grad()
+        agent_i_vae_loss.backward()
+        for parameter in list(trainers[i].vae.parameters()):
+            torch.nn.utils.clip_grad_norm_(parameter, 0.5)
+        trainers[i].vae_optimizer.step()
+    return loss
 
 
 class MADDPGAgentTrainer(AgentTrainer):
-    def __init__(self, name, model, obs_shape_n, act_space_n, agent_index, args, local_q_func=False, device='cpu'):
+    def __init__(self, name, model, obs_shape_n, act_space_n, agent_index, args, team_num, device='cpu'):
         self.name = name
         self.n = len(obs_shape_n)  # 这里n是智能体个数，obs_shape_n=[34,34,34,34,28,28]
         self.agent_index = agent_index
         self.args = args
         self.device = device
-        obs_ph_n = [torch.zeros(obs_shape_n[i]) for i in range(self.n)]
+        obs_ph_n = [torch.zeros(obs_shape_n[i].shape).to(self.device) for i in range(self.n)]
 
+        self.vae, self.vae_optimizer = self.init_vae_model_optimizert(
+            act_space_n=act_space_n, obs_ph_n=obs_ph_n, agent_index=agent_index,
+            lr=args.lr, teammate_num=team_num, num_units=args.num_units, latent_dim=10)
         # 初始化模型和优化器
         self.p, self.p_optimizer, self.target_p, self.act_pdtype, self.act_pd = self.init_p_model_optimizer(
             act_space_n=act_space_n,
@@ -31,14 +57,25 @@ class MADDPGAgentTrainer(AgentTrainer):
         self.max_replay_buffer_len = args.batch_size * args.max_episode_len
         self.replay_sample_index = None
 
-    def init_p_model_optimizer(self, act_space_n, obs_ph_n, agent_index, model, num_units, lr):
+    def init_vae_model_optimizert(self, act_space_n, obs_ph_n, agent_index, teammate_num, num_units, lr, latent_dim=10):
+        self_obs_dim = len(obs_ph_n[agent_index])
         act_pdtype = make_pdtype(act_space_n[agent_index])
-        p_input = len(obs_ph_n[agent_index])  # p_index的索引是当前agent的编号
+        self_act_dim = int(act_pdtype.param_shape()[0])
+        vae = VAE(input_dim=self_obs_dim, hidden_dim=num_units, latent_dim=latent_dim,
+                  obs_output_dim=(teammate_num - 1) * self_obs_dim,
+                  act_output_dim=(teammate_num - 1) * self_act_dim).to(self.device)
+        optimizer = torch.optim.Adam(vae.parameters(), lr=lr)
+        return vae, optimizer
+
+    def init_p_model_optimizer(self, act_space_n, obs_ph_n, agent_index, model, num_units, lr):
+        z = self.vae.encode_to_z(obs_ph_n[agent_index])
+        act_pdtype = make_pdtype(act_space_n[agent_index])
+        p_input = len(obs_ph_n[agent_index]) + len(z)  # p_index的索引是当前agent的编号
 
         # param_shape()是去输出动作的个数的和,因为输出是一个元素的列表所以需要[0]
-        p = model(p_input, int(act_pdtype.param_shape()[0]), num_units=num_units)
-        act_pd = act_pdtype.pdfromflat(p(torch.rand(p_input)))
-        target_p = model(p_input, int(act_pdtype.param_shape()[0]), num_units=num_units)
+        p = model(p_input, int(act_pdtype.param_shape()[0]), num_units=num_units).to(self.device)
+        act_pd = act_pdtype.pdfromflat(p(torch.rand(p_input).to(self.device)))
+        target_p = model(p_input, int(act_pdtype.param_shape()[0]), num_units=num_units).to(self.device)
         p_vars = p.parameters()
         p_optimizer = optim.Adam(p_vars, lr=lr)
         return p, p_optimizer, target_p, act_pdtype, act_pd
@@ -48,8 +85,8 @@ class MADDPGAgentTrainer(AgentTrainer):
         act_ph_n = [act_pdtype_n[i].sample_placeholder([None], name="action" + str(i)) for i in range(len(act_space_n))]
         # 获取输入的尺寸，包括每个agent的观察和各自的动作空间大小
         q_input = sum(i.numel() for i in obs_ph_n) + sum(i.numel() for i in act_ph_n)
-        q = model(q_input, num_outputs=1, num_units=num_units)
-        target_q = model(q_input, num_outputs=1, num_units=num_units)
+        q = model(q_input, num_outputs=1, num_units=num_units).to(self.device)
+        target_q = model(q_input, num_outputs=1, num_units=num_units).to(self.device)
         q_vars = q.parameters()
         q_optimizer = optim.Adam(q_vars, lr=lr)
         return q, q_optimizer, target_q
@@ -78,7 +115,6 @@ class MADDPGAgentTrainer(AgentTrainer):
         batch_input = torch.cat([torch.cat(obs_n, dim=1), torch.cat(act_n, dim=1)], dim=1)
         q_val = self.q(batch_input.data)
 
-        y = torch.tensor(y)
         q_loss = torch.mean(torch.square(q_val - y))
         q_reg = torch.mean(torch.square(q_val))
         loss = q_loss  # + 1e-3 * q_reg
@@ -95,10 +131,9 @@ class MADDPGAgentTrainer(AgentTrainer):
     def p_train(self, obs_n, act_n, grad_norm_clipping):
         # act_input需要将当前策略根据观察选择的动作的采样放进去，目前梯度裁剪没啥问题
         # 根据智能体当前观察获取当前的动作输出分布采样
-        act_output = self.p(obs_n[self.agent_index])
-        # act_output_sample = torch.empty(act_output.shape)
-        # for i in range(act_output.shape[0]):
-        #     act_output_sample[i] = self.act_pdtype.pdfromflat(act_output[i]).sample()
+        z = self.vae.encode_to_z(obs_n[self.agent_index])
+        obs_z = torch.cat([obs_n[self.agent_index], z], -1)
+        act_output = self.p(obs_z)
         act_output_sample = self.act_pd.sample(act_output)
         act_n[self.agent_index] = act_output_sample
 
@@ -117,15 +152,14 @@ class MADDPGAgentTrainer(AgentTrainer):
 
     def action(self, obs):
         # 输入观察输出动作分布的采样
-        flat = self.p(torch.from_numpy(obs).to(torch.float32))
+        z = self.vae.encode_to_z(obs)
+        obs_z = torch.cat([obs, z], -1)
+        flat = self.p(obs_z)
         # return self.act_pdtype.pdfromflat(flat).sample().detach().numpy()
-        return self.act_pd.sample(flat).detach().cpu().numpy()
+        return self.act_pd.sample(flat).detach()
 
-    def experience(self, obs, act, rew, new_obs, done, terminal):
-        self.replay_buffer.add(obs, act, rew, new_obs, float(done))
-
-    def preupdate(self):
-        self.replay_sample_index = None
+    def experience(self, obs, act, rew, new_obs):
+        self.replay_buffer.add(obs, act, rew, new_obs)
 
     def sample_from_replay(self, agents):
         self.replay_sample_index = self.replay_buffer.make_index(self.args.batch_size)
@@ -135,40 +169,26 @@ class MADDPGAgentTrainer(AgentTrainer):
         act_n = []
         index = self.replay_sample_index
         for i in range(self.n):
-            obs, act, rew, obs_next, done = agents[i].replay_buffer.sample_index(index)
-            obs_n.append(torch.from_numpy(obs))
-            obs_next_n.append(torch.from_numpy(obs_next))
-            act_n.append(torch.from_numpy(act))
+            obs, act, rew, obs_next = agents[i].replay_buffer.sample_index(index)
+            obs_n.append(torch.stack(obs, dim=0))
+            obs_next_n.append(torch.stack(obs_next, dim=0))
+            act_n.append(torch.stack(act, dim=0))
         # NOTE 取完所有agent的o,a,r,o',done再单独取自己的
-        obs, act, rew, obs_next, done = self.replay_buffer.sample_index(index)
-        return obs_n, obs_next_n, act_n, obs, act, rew, obs_next, done
+        obs, act, rew, obs_next = self.replay_buffer.sample_index(index)
+        rew=torch.stack(rew, dim=0)
+        return obs_n, obs_next_n, act_n, obs, act, rew, obs_next
 
     def berman(self, agents, obs_next_n, rew):
-        num_sample = 1
         target_q = 0.0
-        # for no_use in range(num_sample):
-        #     for i in range(self.n):
-        #         flat=agents[i].p_debug(obs_next_n[i], target_p_values=True)
-        #         target_act_next_n.append(torch.as_tensor([agents[i].act_pdtype.pdfromflat(flat[j]).sample().detach().numpy() for j in range(flat.shape[0])],dtype=np.float32,copy=False))
-        # 贝尔曼方程的实现,done在加入经验池的时候由布尔转float了
+
         target_act_next_n = []
-        # for no_use in range(num_sample):
-        #     for i in range(self.n):
-        #         flat = agents[i].p_debug(obs_next_n[i], target_p_values=True)
-        #         target_act_next_sample = torch.empty((self.args.batch_size, agents[i].act_pdtype.param_shape()[0]))
-        #         for j in range(self.args.batch_size):
-        #             target_act_next_sample[j] = agents[i].act_pdtype.pdfromflat(flat[j]).sample().detach()
-        #         target_act_next_n.append(target_act_next_sample)
-        #     target_q_next = self.q_debug(obs_next_n, target_act_next_n, target_q_values=True).detach().numpy()
-        #     target_q += rew.reshape(target_q_next.shape) + self.args.gamma * target_q_next
-        # target_q /= num_sample
-        for no_use in range(num_sample):
-            for i in range(self.n):
-                flat = agents[i].p_debug(obs_next_n[i], target_p_values=True)
-                target_act_next_n.append(agents[i].act_pd.sample(flat))
-            target_q_next = self.q_debug(obs_next_n, target_act_next_n, target_q_values=True).detach().numpy()
-            target_q += rew.reshape(target_q_next.shape) + self.args.gamma * target_q_next
-        target_q /= num_sample
+        for i in range(self.n):
+            z = agents[i].vae.encode_to_z(obs_next_n[i])
+            obs_next_z = torch.cat([obs_next_n[i], z], -1)
+            flat = agents[i].p_debug(obs_next_z, target_p_values=True)
+            target_act_next_n.append(agents[i].act_pd.sample(flat))
+        target_q_next = self.q_debug(obs_next_n, target_act_next_n, target_q_values=True).detach()
+        target_q += rew + self.args.gamma * target_q_next
         return target_q
 
     def update(self, agents, t):
@@ -176,7 +196,8 @@ class MADDPGAgentTrainer(AgentTrainer):
             return
         if t % 100 != 0:  # 每百训练步才更新一次
             return
-        obs_n, obs_next_n, act_n, obs, act, rew, obs_next, done = self.sample_from_replay(agents)
+        # print('p q_training')
+        obs_n, obs_next_n, act_n, obs, act, rew, obs_next = self.sample_from_replay(agents)
         target_q = self.berman(agents, obs_next_n, rew)
 
         q_loss = self.q_train(obs_n=obs_n, act_n=act_n, y=target_q, grad_norm_clipping=0.5)
