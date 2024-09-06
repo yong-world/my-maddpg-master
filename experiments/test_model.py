@@ -5,23 +5,25 @@ from smac.env import StarCraft2Env
 import numpy as np
 import time
 import pickle
-from  train_pytorch import mlp_model
+from train_pytorch import MlpModel
+from maddpg_pytorch.maddpg_pytorch import ActorEncoder
 from maddpg_pytorch.vae import VAE
 from train_pytorch import act_mask_max
+
 env = StarCraft2Env(map_name="3m")
 env_info = env.get_env_info()
-
 n_actions = env_info["n_actions"]
 n_agents = env_info["n_agents"]
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 n_episodes = 100
 e = 0
 total_reward = []
-with open("./MADDPG_SMAC/3mT：0904_0147E：60000/exp1pytorch_model.pt", "rb") as fp:
+
+with open("./MADDPG_SMAC/4_3m2000/pytorch_model.pt", "rb") as fp:
     all_net = torch.load(fp)
-all_net=all_net['trainers']
-actors=[]
-for agent in all_net:
+all_agentt = all_net['trainers']
+actors = []
+for agent in all_agentt:
     actors.append(agent[0])
 while e < n_episodes:
     env.reset()
@@ -40,11 +42,15 @@ while e < n_episodes:
         actions = []
         for agent_id in range(n_agents):
             avail_actions = env.get_avail_agent_actions(agent_id)
-            action=actors[agent_id](torch.from_numpy(obs[agent_id]).to(device))
+            action = actors[agent_id](torch.from_numpy(obs[agent_id]).to(device))
             actions.append(action)
-        actions = act_mask_max(actors,env)
-        reward, terminated, _ = env.step(actions)
-        # time.sleep(0.15)
+        choice_actions = act_mask_max(actions, env)
+        for agent_id in range(n_agents):
+            if env.get_avail_agent_actions(agent_id)[choice_actions[agent_id]] !=1:
+                print('有问题')
+        choice_actions = act_mask_max(actions, env)
+        reward, terminated, _ = env.step(choice_actions)
+        time.sleep(0.3)
         episode_reward += reward
     total_reward.append(episode_reward)
 

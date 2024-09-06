@@ -25,11 +25,14 @@ def act_mask_max(action_n, env):
     indices = []
     avail_agent_actions = [env.get_avail_agent_actions(i) for i in range(env.n_agents)]
     avail_agent_actions_tensor = torch.tensor(avail_agent_actions).to(device)
-    for tensor, mask in zip(action_n, avail_agent_actions_tensor):
+    for tensor, mask ,agent_id in zip(action_n, avail_agent_actions_tensor,range(env.n_agents)):
         masked_tensor = tensor * mask
         # 找到最大值的索引
         max_index = torch.argmax(masked_tensor)
         indices.append(max_index.item())
+        # if env.get_avail_agent_actions(agent_id)[indices[agent_id]] !=1:
+        #     print("www")
+
     return indices
 
 
@@ -38,7 +41,7 @@ def parse_args():
     # Environment
     parser.add_argument("--scenario", type=str, default="3m", help="name of the scenario script")
     parser.add_argument("--max-episode-len", type=int, default=60, help="maximum episode length")
-    parser.add_argument("--num-episodes", type=int, default=2000, help="number of episodes")
+    parser.add_argument("--num-episodes", type=int, default=1000, help="number of episodes")
     parser.add_argument("--num-adversaries", type=int, default=0, help="number of adversaries")
     parser.add_argument("--good-policy", type=str, default="maddpg", help="policy for good agents")
     parser.add_argument("--adv-policy", type=str, default="maddpg", help="policy of adversaries")
@@ -192,10 +195,10 @@ def save_all_data(env, arglist, episode_rewards, final_ep_rewards, log, trainers
     # 保存训练记录
     log.append(
         'mean rewards:{}\n'.format(str(np.mean(episode_rewards))) + 'total_won_rate:{}'.format(total_win_rate))
-    log.append('End iterations\n' + '\n')
+    log.append('End iterations\n')
     with open(exp_dir + 'train_log.txt', 'w+') as fp:
         for log_line in log:
-            fp.write(str(log_line))
+            fp.write(str(log_line)+'\n')
     with open(exp_dir + 'episode_reward.txt', 'w+') as fp:
         for episode_reward in episode_rewards:
             fp.write(str(episode_reward) + '\n')
@@ -244,7 +247,7 @@ def train(arglist):
     train_info = ('scenario:{}\tnum-episodes:{}\tbatch-size:{}\t'
                   'save-rates:{}\tlr:{}').format(arglist.scenario, arglist.num_episodes, arglist.batch_size,
                                                  arglist.save_rate, arglist.lr)
-    print(train_info + '\n')
+    print(train_info)
     log.append('-----------------------------------------------------------------------------------------')
     log.append('Starting iterations : {}'.format(get_time()))
     log.append(train_info)

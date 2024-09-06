@@ -11,16 +11,17 @@ from maddpg_pytorch.vae import VAE, vae_loss
 
 
 class ActorEncoder(nn.Module):
-    def __init__(self, num_outputs, vae, num_units=64):
+    def __init__(self, num_outputs, vae, act_pd, num_units=64):
         super(ActorEncoder, self).__init__()
         self.encoder_to_z = vae.encode_to_z
-        actor_input_dim = vae.input_dim+vae.z_dim
+        actor_input_dim = vae.input_dim + vae.z_dim
+        self.output_dim = num_outputs
         self.input_dim = vae.input_dim
         self.fc1 = nn.Linear(actor_input_dim, num_units)
         self.fc2 = nn.Linear(num_units, num_units)
         self.fc3 = nn.Linear(num_units, num_outputs)
         self.relu = nn.ReLU()
-
+        self.act_pd = act_pd
 
     def forward(self, x):
         z = self.encoder_to_z(x)
@@ -28,6 +29,7 @@ class ActorEncoder(nn.Module):
         x = self.relu(self.fc1(x))
         x = self.relu(self.fc2(x))
         x = self.fc3(x)
+        x = self.act_pd.sample(x)
         return x
 
 
@@ -39,7 +41,6 @@ class MADDPGAgentTrainer(AgentTrainer):
         self.args = args
         self.device = device
         obs_ph_n = [torch.zeros(obs_shape_n[i].shape).to(self.device) for i in range(self.n)]
-
         self.vae, self.vae_optimizer = self.init_vae_model_optimizert(
             act_space_n=act_space_n, obs_ph_n=obs_ph_n, agent_index=agent_index,
             lr=args.lr, teammate_num=team_num, num_units=args.num_units, latent_dim=10)
@@ -68,11 +69,14 @@ class MADDPGAgentTrainer(AgentTrainer):
 
     def init_p_model_optimizer(self, act_space_n, obs_ph_n, agent_index, model, num_units, lr):
         act_pdtype = make_pdtype(act_space_n[agent_index])
+        output_dim = int(act_pdtype.param_shape()[0])
+        act_pd = act_pdtype.pdfromflat(torch.rand(output_dim).to(self.device))
         # param_shape()是去输出动作的个数的和,因为输出是一个元素的列表所以需要[0]
-        p = ActorEncoder(num_outputs=int(act_pdtype.param_shape()[0]),num_units=num_units,vae=self.vae).to(self.device)
-
-        act_pd = act_pdtype.pdfromflat(p(torch.rand(p.input_dim).to(self.device)))
-        target_p = ActorEncoder(num_outputs=int(act_pdtype.param_shape()[0]),num_units=num_units,vae=self.vae).to(self.device)
+        p = ActorEncoder(num_outputs=output_dim, num_units=num_units, vae=self.vae, act_pd=act_pd).to(
+            self.device)
+        target_p = ActorEncoder(num_outputs=int(act_pdtype.param_shape()[0]), num_units=num_units, vae=self.vae,
+                                act_pd=act_pd).to(
+            self.device)
         p_vars = p.parameters()
         p_optimizer = optim.Adam(p_vars, lr=lr)
         return p, p_optimizer, target_p, act_pdtype, act_pd
@@ -129,8 +133,7 @@ class MADDPGAgentTrainer(AgentTrainer):
         # act_input需要将当前策略根据观察选择的动作的采样放进去，目前梯度裁剪没啥问题
         # 根据智能体当前观察获取当前的动作输出分布采样
         act_output = self.p(obs_n[self.agent_index])
-        act_output_sample = self.act_pd.sample(act_output)
-        act_n[self.agent_index] = act_output_sample
+        act_n[self.agent_index] = act_output
 
         batch_input = torch.cat([torch.cat(obs_n, dim=1), torch.cat(act_n, dim=1)], dim=1)
         q_loss = -torch.mean(self.q(batch_input))
@@ -147,9 +150,7 @@ class MADDPGAgentTrainer(AgentTrainer):
 
     def action(self, obs):
         # 输入观察输出动作分布的采样
-        flat = self.p(obs)
-        # return self.act_pdtype.pdfromflat(flat).sample().detach().numpy()
-        return self.act_pd.sample(flat).detach()
+        return self.p(obs).detach()
 
     def experience(self, obs, act, rew, new_obs):
         self.replay_buffer.add(obs, act, rew, new_obs)
@@ -176,8 +177,8 @@ class MADDPGAgentTrainer(AgentTrainer):
 
         target_act_next_n = []
         for i in range(self.n):
-            flat = agents[i].p_debug(obs_next_n[i], target_p_values=True)
-            target_act_next_n.append(agents[i].act_pd.sample(flat))
+            act_sample = agents[i].p_debug(obs_next_n[i], target_p_values=True)
+            target_act_next_n.append(act_sample)
         target_q_next = self.q_debug(obs_next_n, target_act_next_n, target_q_values=True).detach()
         target_q += rew + self.args.gamma * target_q_next
         return target_q
