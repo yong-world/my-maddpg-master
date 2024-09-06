@@ -6,7 +6,10 @@ import torch.nn.functional as F
 class VAE(nn.Module):
     def __init__(self, input_dim, hidden_dim, latent_dim, obs_output_dim, act_output_dim):
         super(VAE, self).__init__()
-
+        self.input_dim = input_dim
+        self.z_dim = latent_dim
+        self.obs_output_dim = obs_output_dim
+        self.act_output_dim = act_output_dim
         # 编码器部分
         self.encoder = nn.Sequential(
             nn.Linear(input_dim, hidden_dim),
@@ -30,7 +33,6 @@ class VAE(nn.Module):
     def encode_to_z(self, observation):
         encoded = self.encoder(observation)
         mu, log_var = torch.chunk(encoded, 2, dim=-1)  # 拆分成一半一半，左一半是mu，又一半是log_var对数方差
-
         # 重参数化技巧：生成隐藏特征 z
         z = self.reparameterize(mu, log_var)
         return z
@@ -54,6 +56,7 @@ class VAE(nn.Module):
         return recon_obs, recon_action, mu, log_var
 
 
+
 def vae_loss(recon_obs, recon_action, obs, action, mu, log_var):
     # 重构误差 (MSE)
     recon_loss_obs = F.mse_loss(recon_obs, obs, reduction='sum')
@@ -64,32 +67,26 @@ def vae_loss(recon_obs, recon_action, obs, action, mu, log_var):
 
     # 总损失
     return recon_loss_obs + recon_loss_action + kl_div
-# 假设你已经有obs（观察值）和action（动作）的训练数据
-# obs 和 action 都应该是 PyTorch 张量，形状为 [batch_size, input_dim]
 
-# input_dim = obs.shape[1]
-# hidden_dim = 128  # 隐藏层维度
-# latent_dim = 32  # 隐空间维度
-#
-# # 创建VAE模型和优化器
-# model = VAE(input_dim, hidden_dim, latent_dim)
-# optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
-#
-# # 训练循环
-# num_epochs = 100
-# for epoch in range(num_epochs):
-#     model.train()
-#
-#     # 前向传播
-#     recon_obs, recon_action, mu, log_var = model(obs)
-#
-#     # 计算损失
-#     loss = vae_loss(recon_obs, recon_action, obs, action, mu, log_var)
-#
-#     # 反向传播和优化
-#     optimizer.zero_grad()
-#     loss.backward()
-#     optimizer.step()
-#
-#     if epoch % 10 == 0:
-#         print(f"Epoch [{epoch}/{num_epochs}], Loss: {loss.item():.4f}")
+
+
+def vae_train(trainers):
+    vae_obs_n, vae_obs_next_n, vae_act_n, vae_obs, vae_act, vae_rew, vae_obs_next = trainers[
+        0].sample_from_replay(trainers)
+    loss = []
+    n_agents=len(trainers)
+    for i in range(n_agents):
+        teammate_obs = [vae_obs_n[j] for j in range(n_agents) if j != i]
+        teammate_obs = torch.cat(teammate_obs, -1)
+        teammate_act = [vae_act_n[j] for j in range(n_agents) if j != i]
+        teammate_act = torch.cat(teammate_act, -1)
+        recon_obs, recon_action, mu, log_var = trainers[i].vae(vae_obs_n[i])
+        agent_i_vae_loss = vae_loss(recon_obs=recon_obs, recon_action=recon_action, obs=teammate_obs,
+                                    action=teammate_act, mu=mu, log_var=log_var)
+        loss.append(agent_i_vae_loss.item())
+        trainers[i].vae_optimizer.zero_grad()
+        agent_i_vae_loss.backward()
+        for parameter in list(trainers[i].vae.parameters()):
+            torch.nn.utils.clip_grad_norm_(parameter, 0.5)
+        trainers[i].vae_optimizer.step()
+    return loss

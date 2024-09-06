@@ -10,26 +10,25 @@ from maddpg_pytorch.distributions_pytorch import make_pdtype
 from maddpg_pytorch.vae import VAE, vae_loss
 
 
-def vae_train(trainers):
-    vae_obs_n, vae_obs_next_n, vae_act_n, vae_obs, vae_act, vae_rew, vae_obs_next = trainers[
-        0].sample_from_replay(trainers)
-    loss = []
-    n_agents=len(trainers)
-    for i in range(n_agents):
-        teammate_obs = [vae_obs_n[j] for j in range(n_agents) if j != i]
-        teammate_obs = torch.cat(teammate_obs, -1)
-        teammate_act = [vae_act_n[j] for j in range(n_agents) if j != i]
-        teammate_act = torch.cat(teammate_act, -1)
-        recon_obs, recon_action, mu, log_var = trainers[i].vae(vae_obs_n[i])
-        agent_i_vae_loss = vae_loss(recon_obs=recon_obs, recon_action=recon_action, obs=teammate_obs,
-                                    action=teammate_act, mu=mu, log_var=log_var)
-        loss.append(agent_i_vae_loss.item())
-        trainers[i].vae_optimizer.zero_grad()
-        agent_i_vae_loss.backward()
-        for parameter in list(trainers[i].vae.parameters()):
-            torch.nn.utils.clip_grad_norm_(parameter, 0.5)
-        trainers[i].vae_optimizer.step()
-    return loss
+class ActorEncoder(nn.Module):
+    def __init__(self, num_outputs, vae, num_units=64):
+        super(ActorEncoder, self).__init__()
+        self.encoder_to_z = vae.encode_to_z
+        actor_input_dim = vae.input_dim+vae.z_dim
+        self.input_dim = vae.input_dim
+        self.fc1 = nn.Linear(actor_input_dim, num_units)
+        self.fc2 = nn.Linear(num_units, num_units)
+        self.fc3 = nn.Linear(num_units, num_outputs)
+        self.relu = nn.ReLU()
+
+
+    def forward(self, x):
+        z = self.encoder_to_z(x)
+        x = torch.cat((z, x), dim=-1)
+        x = self.relu(self.fc1(x))
+        x = self.relu(self.fc2(x))
+        x = self.fc3(x)
+        return x
 
 
 class MADDPGAgentTrainer(AgentTrainer):
@@ -68,14 +67,12 @@ class MADDPGAgentTrainer(AgentTrainer):
         return vae, optimizer
 
     def init_p_model_optimizer(self, act_space_n, obs_ph_n, agent_index, model, num_units, lr):
-        z = self.vae.encode_to_z(obs_ph_n[agent_index])
         act_pdtype = make_pdtype(act_space_n[agent_index])
-        p_input = len(obs_ph_n[agent_index]) + len(z)  # p_index的索引是当前agent的编号
-
         # param_shape()是去输出动作的个数的和,因为输出是一个元素的列表所以需要[0]
-        p = model(p_input, int(act_pdtype.param_shape()[0]), num_units=num_units).to(self.device)
-        act_pd = act_pdtype.pdfromflat(p(torch.rand(p_input).to(self.device)))
-        target_p = model(p_input, int(act_pdtype.param_shape()[0]), num_units=num_units).to(self.device)
+        p = ActorEncoder(num_outputs=int(act_pdtype.param_shape()[0]),num_units=num_units,vae=self.vae).to(self.device)
+
+        act_pd = act_pdtype.pdfromflat(p(torch.rand(p.input_dim).to(self.device)))
+        target_p = ActorEncoder(num_outputs=int(act_pdtype.param_shape()[0]),num_units=num_units,vae=self.vae).to(self.device)
         p_vars = p.parameters()
         p_optimizer = optim.Adam(p_vars, lr=lr)
         return p, p_optimizer, target_p, act_pdtype, act_pd
@@ -131,9 +128,7 @@ class MADDPGAgentTrainer(AgentTrainer):
     def p_train(self, obs_n, act_n, grad_norm_clipping):
         # act_input需要将当前策略根据观察选择的动作的采样放进去，目前梯度裁剪没啥问题
         # 根据智能体当前观察获取当前的动作输出分布采样
-        z = self.vae.encode_to_z(obs_n[self.agent_index])
-        obs_z = torch.cat([obs_n[self.agent_index], z], -1)
-        act_output = self.p(obs_z)
+        act_output = self.p(obs_n[self.agent_index])
         act_output_sample = self.act_pd.sample(act_output)
         act_n[self.agent_index] = act_output_sample
 
@@ -152,9 +147,7 @@ class MADDPGAgentTrainer(AgentTrainer):
 
     def action(self, obs):
         # 输入观察输出动作分布的采样
-        z = self.vae.encode_to_z(obs)
-        obs_z = torch.cat([obs, z], -1)
-        flat = self.p(obs_z)
+        flat = self.p(obs)
         # return self.act_pdtype.pdfromflat(flat).sample().detach().numpy()
         return self.act_pd.sample(flat).detach()
 
@@ -175,7 +168,7 @@ class MADDPGAgentTrainer(AgentTrainer):
             act_n.append(torch.stack(act, dim=0))
         # NOTE 取完所有agent的o,a,r,o',done再单独取自己的
         obs, act, rew, obs_next = self.replay_buffer.sample_index(index)
-        rew=torch.stack(rew, dim=0)
+        rew = torch.stack(rew, dim=0)
         return obs_n, obs_next_n, act_n, obs, act, rew, obs_next
 
     def berman(self, agents, obs_next_n, rew):
@@ -183,9 +176,7 @@ class MADDPGAgentTrainer(AgentTrainer):
 
         target_act_next_n = []
         for i in range(self.n):
-            z = agents[i].vae.encode_to_z(obs_next_n[i])
-            obs_next_z = torch.cat([obs_next_n[i], z], -1)
-            flat = agents[i].p_debug(obs_next_z, target_p_values=True)
+            flat = agents[i].p_debug(obs_next_n[i], target_p_values=True)
             target_act_next_n.append(agents[i].act_pd.sample(flat))
         target_q_next = self.q_debug(obs_next_n, target_act_next_n, target_q_values=True).detach()
         target_q += rew + self.args.gamma * target_q_next

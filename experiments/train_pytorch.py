@@ -12,12 +12,25 @@ import torch.nn as nn
 import datetime
 import numpy as np
 from gym import spaces
-from maddpg_pytorch.maddpg_pytorch import MADDPGAgentTrainer, vae_train
-
+from maddpg_pytorch.maddpg_pytorch import MADDPGAgentTrainer
+from maddpg_pytorch.vae import vae_train
 from smac.env import StarCraft2Env
+import pandas
 from absl import logging
+import csv
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+def act_mask_max(action_n, env):
+    indices = []
+    avail_agent_actions = [env.get_avail_agent_actions(i) for i in range(env.n_agents)]
+    avail_agent_actions_tensor = torch.tensor(avail_agent_actions).to(device)
+    for tensor, mask in zip(action_n, avail_agent_actions_tensor):
+        masked_tensor = tensor * mask
+        # 找到最大值的索引
+        max_index = torch.argmax(masked_tensor)
+        indices.append(max_index.item())
+    return indices
 
 
 def parse_args():
@@ -25,7 +38,7 @@ def parse_args():
     # Environment
     parser.add_argument("--scenario", type=str, default="3m", help="name of the scenario script")
     parser.add_argument("--max-episode-len", type=int, default=60, help="maximum episode length")
-    parser.add_argument("--num-episodes", type=int, default=60000, help="number of episodes")
+    parser.add_argument("--num-episodes", type=int, default=2000, help="number of episodes")
     parser.add_argument("--num-adversaries", type=int, default=0, help="number of adversaries")
     parser.add_argument("--good-policy", type=str, default="maddpg", help="policy for good agents")
     parser.add_argument("--adv-policy", type=str, default="maddpg", help="policy of adversaries")
@@ -58,62 +71,19 @@ def parse_args():
     return parser.parse_args()
 
 
-class mlp_model(nn.Module):
-    def __init__(self, input_dim, num_outputs, num_units=64):
-        super(mlp_model, self).__init__()
-        self.fc1 = nn.Linear(input_dim, num_units)
-        self.fc2 = nn.Linear(num_units, num_units)
-        self.fc3 = nn.Linear(num_units, num_outputs)
-        self.relu = nn.ReLU()
-
-    def forward(self, x):
-        x = self.relu(self.fc1(x))
-        x = self.relu(self.fc2(x))
-        x = self.fc3(x)
-        return x
-
-
 def get_time():
     return str(datetime.datetime.now().strftime('%m%d_%H%M'))
 
 
-def save_all_data(env, arglist, episode_rewards, final_ep_rewards, log, trainers):
-    # 创建路径
-    exp_dir = arglist.log_head + '{}T：{}E：{}/'.format(arglist.scenario, get_time(), arglist.num_episodes)
-    if not os.path.exists(exp_dir):
-        os.makedirs(exp_dir)
-        print("{} created".format(exp_dir))
-    # 保存奖励、胜率对象
-    total_win_rate = env.battles_won / env.battles_game
-    episode_rewards_1000rewards_winrate = exp_dir + 'episode_rewards_1000rewards_winrate.pkl'
-    with open(episode_rewards_1000rewards_winrate, 'wb') as fp:
-        pickle.dump([episode_rewards, final_ep_rewards, total_win_rate], fp)
-
-    # 绘图并保存
-    mean_reward = np.mean(episode_rewards)
-    plot_save(data_input=episode_rewards,
-              title='mean rewards:{} win_rate:{}'.format(mean_reward, total_win_rate),
-              x_label='episode', y_label='reward', png_dir=exp_dir + 'total_rewards.png')
-    plot_save(data_input=final_ep_rewards,
-              title='rewards:{} win_rate:{}'.format(mean_reward, total_win_rate),
-              x_label='episode',
-              y_label='reward', png_dir=exp_dir + 'sample_rewards.png', marker='.')
-
-    # 保存训练记录
-    log.append(
-        'mean rewards:{}\n'.format(str(np.mean(episode_rewards))) + 'total_won_rate:{}'.format(total_win_rate))
-    log.append('End iterations\n' + '\n')
-    with open(exp_dir + 'train_log.txt', 'w+') as fp:
-        for log_line in log:
-            fp.write(str(log_line))
-    with open(exp_dir + 'episode_reward.txt', 'w+') as fp:
-        for episode_reward in episode_rewards:
-            fp.write(str(episode_reward))
-    # 保存模型
-    save_path = os.path.join(arglist.save_dir, arglist.exp_name + "pytorch_model.pt")
-    torch.save({'trainers': [[trainers[i].p, trainers[i].target_p, trainers[i].q, trainers[i].target_q] for i in
-                             range(trainers[0].n)]}, save_path)
-
+def get_trainers(env, n_agent, obs_space_n, act_space_n, arglist, device):
+    trainers = []
+    model = MlpModel
+    trainer = MADDPGAgentTrainer
+    for i in range(env.get_env_info()['n_agents']):
+        trainers.append(
+            trainer(name="agent_%d" % i, model=model, obs_shape_n=obs_space_n, act_space_n=act_space_n, agent_index=i,
+                    args=arglist, device=device, team_num=n_agent))
+    return trainers
 
 def load_state(load_dir, trainers):
     tobe_load_models = torch.load(load_dir)['trainers']
@@ -150,27 +120,19 @@ def make_env(map_name):
     return env, env_info, action_space_n, observation_space_n, act_space_acc, obs_space_acc, obs_n
 
 
-def get_trainers(env, n_agent, obs_space_n, act_space_n, arglist, device):
-    trainers = []
-    model = mlp_model
-    trainer = MADDPGAgentTrainer
-    for i in range(env.get_env_info()['n_agents']):
-        trainers.append(
-            trainer(name="agent_%d" % i, model=model, obs_shape_n=obs_space_n, act_space_n=act_space_n, agent_index=i,
-                    args=arglist, device=device, team_num=n_agent))
-    return trainers
+class MlpModel(nn.Module):
+    def __init__(self, input_dim, num_outputs, num_units=64):
+        super(MlpModel, self).__init__()
+        self.fc1 = nn.Linear(input_dim, num_units)
+        self.fc2 = nn.Linear(num_units, num_units)
+        self.fc3 = nn.Linear(num_units, num_outputs)
+        self.relu = nn.ReLU()
 
-
-def act_mask_max(action_n, env):
-    indices = []
-    avail_agent_actions = [env.get_avail_agent_actions(i) for i in range(env.n_agents)]
-    avail_agent_actions_tensor = torch.tensor(avail_agent_actions).to(device)
-    for tensor, mask in zip(action_n, avail_agent_actions_tensor):
-        masked_tensor = tensor * mask
-        # 找到最大值的索引
-        max_index = torch.argmax(masked_tensor)
-        indices.append(max_index.item())
-    return indices
+    def forward(self, x):
+        x = self.relu(self.fc1(x))
+        x = self.relu(self.fc2(x))
+        x = self.fc3(x)
+        return x
 
 
 def plot_save(data_input, title, x_label, y_label, png_dir, marker=None):
@@ -182,6 +144,76 @@ def plot_save(data_input, title, x_label, y_label, png_dir, marker=None):
     plt.savefig(png_dir)
     print("figure saved to:", png_dir)
     plt.show()
+
+
+# 读取CSV文件
+def read_from_csv(file_name):
+    data = []
+    with open(file_name, mode='r', encoding='utf-8') as file:
+        reader = csv.reader(file)
+        for row in reader:
+            converted_row = []
+            for item in row:
+                # 尝试将字符串转换为整数或浮点数
+                if item.isdigit():
+                    converted_row.append(int(item))
+                else:
+                    try:
+                        converted_row.append(float(item))
+                    except ValueError:
+                        converted_row.append(item)  # 保持原始字符串
+            data.append(converted_row)
+    print(f"数据已从 {file_name} 读取")
+    return data
+
+
+def save_all_data(env, arglist, episode_rewards, final_ep_rewards, log, trainers):
+    # 创建路径
+    exp_dir = arglist.log_head + '{}_{}{}/'.format(arglist.exp_index, arglist.scenario, arglist.num_episodes)
+    if not os.path.exists(exp_dir):
+        os.makedirs(exp_dir)
+        print("{} created".format(exp_dir))
+    # 保存奖励、胜率对象
+    total_win_rate = env.battles_won / env.battles_game
+    episode_rewards_1000rewards_winrate = exp_dir + 'episode_rewards_1000rewards_winrate.pkl'
+    with open(episode_rewards_1000rewards_winrate, 'wb') as fp:
+        pickle.dump([episode_rewards, final_ep_rewards, total_win_rate], fp)
+
+    # 绘图并保存
+    mean_reward = np.mean(episode_rewards)
+    plot_save(data_input=episode_rewards,
+              title='mean rewards:{} win_rate:{}'.format(mean_reward, total_win_rate),
+              x_label='episode', y_label='reward', png_dir=exp_dir + 'total_rewards.png')
+    plot_save(data_input=final_ep_rewards,
+              title='rewards:{} win_rate:{}'.format(mean_reward, total_win_rate),
+              x_label='episode',
+              y_label='reward', png_dir=exp_dir + 'sample_rewards.png', marker='.')
+
+    # 保存训练记录
+    log.append(
+        'mean rewards:{}\n'.format(str(np.mean(episode_rewards))) + 'total_won_rate:{}'.format(total_win_rate))
+    log.append('End iterations\n' + '\n')
+    with open(exp_dir + 'train_log.txt', 'w+') as fp:
+        for log_line in log:
+            fp.write(str(log_line))
+    with open(exp_dir + 'episode_reward.txt', 'w+') as fp:
+        for episode_reward in episode_rewards:
+            fp.write(str(episode_reward) + '\n')
+    # 保存模型
+    save_path = exp_dir + "pytorch_model.pt"
+    torch.save({'trainers': [[trainers[i].p, trainers[i].target_p, trainers[i].q, trainers[i].target_q, trainers[i].vae]for i in range(trainers[0].n)]}, save_path)
+
+    # 保存自变参数
+    arglist.Variable_Parameter[1][1] += 1
+    write_to_csv('Variable_Parameter.csv', arglist.Variable_Parameter)
+
+
+def write_to_csv(file_name, data):
+    # data应为列表，每个元素都是一个参数或参数列表（每行的数据）
+    with open(file_name, mode='w', newline='', encoding='utf-8') as file:
+        writer = csv.writer(file)
+        writer.writerows(data)
+    print(f"数据已写入 {file_name}")
 
 
 def train(arglist):
@@ -211,8 +243,8 @@ def train(arglist):
     print('Starting iterations...')
     train_info = ('scenario:{}\tnum-episodes:{}\tbatch-size:{}\t'
                   'save-rates:{}\tlr:{}').format(arglist.scenario, arglist.num_episodes, arglist.batch_size,
-                                                   arglist.save_rate, arglist.lr)
-    print(train_info+'\n')
+                                                 arglist.save_rate, arglist.lr)
+    print(train_info + '\n')
     log.append('-----------------------------------------------------------------------------------------')
     log.append('Starting iterations : {}'.format(get_time()))
     log.append(train_info)
@@ -243,11 +275,11 @@ def train(arglist):
             obs_n, state = env.reset()
             obs_n = np.array(obs_n)
             obs_n = torch.from_numpy(obs_n).to(device)
-            episode_step = 1
             episode_rewards.append(0)
-            sys.stdout.write("\repsiode:{}".format(episode_num))
+            sys.stdout.write("\repsiode:{},steps:{},episode_step:{}".format(episode_num, train_step, episode_step))
             sys.stdout.flush()
             episode_num += 1
+            episode_step = 0
             if info_n == {}:
                 episode_win_lose.append(0)
             else:
@@ -268,7 +300,7 @@ def train(arglist):
         if terminated and (episode_num % arglist.save_rate == 0):
             # 输出最近一千轮信息
             output = "\rsteps: {}, episodes: {}, mean episode reward: {}, won_rate: {} time: {}".format(
-                train_step, len(episode_rewards), np.mean(episode_rewards[-arglist.save_rate:]),
+                train_step, episode_num, np.mean(episode_rewards[-arglist.save_rate:]),
                 np.mean(episode_win_lose[-arglist.save_rate:]), round(time.time() - episode1000_start, 3))
             # 最近一千轮的平均奖励
             final_ep_rewards.append(np.mean(episode_rewards[-arglist.save_rate:]))
@@ -286,9 +318,10 @@ def train(arglist):
 
 if __name__ == '__main__':
     arglist = parse_args()
-    if not os.path.exists(arglist.log_dir):
-        os.makedirs(arglist.log_dir)
-        print("Folder created")
+    data = read_from_csv('Variable_Parameter.csv')
+    setattr(arglist, 'Variable_Parameter', data)
+    for para in data[1:]:
+        setattr(arglist, para[0], para[1])
     for i in range(1):
         train(arglist)
 
