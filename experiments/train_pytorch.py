@@ -25,7 +25,7 @@ def parse_args():
     # Environment
     parser.add_argument("--scenario", type=str, default="3m", help="name of the scenario script")
     parser.add_argument("--max-episode-len", type=int, default=60, help="maximum episode length")
-    parser.add_argument("--num-episodes", type=int, default=60000, help="number of episodes")
+    parser.add_argument("--num-episodes", type=int, default=100000, help="number of episodes")
     parser.add_argument("--num-adversaries", type=int, default=0, help="number of adversaries")
     parser.add_argument("--good-policy", type=str, default="maddpg", help="policy for good agents")
     parser.add_argument("--adv-policy", type=str, default="maddpg", help="policy of adversaries")
@@ -105,7 +105,7 @@ def save_all_data(env, arglist, episode_rewards, final_ep_rewards, log, trainers
     log.append('End iterations\n' + '\n')
     with open(exp_dir + 'train_log.txt', 'w+') as fp:
         for log_line in log:
-            fp.write(str(log_line))
+            fp.write(str(log_line)+'\n')
     with open(exp_dir + 'episode_reward.txt', 'w+') as fp:
         for episode_reward in episode_rewards:
             fp.write(str(episode_reward))
@@ -211,8 +211,8 @@ def train(arglist):
     print('Starting iterations...')
     train_info = ('scenario:{}\tnum-episodes:{}\tbatch-size:{}\t'
                   'save-rates:{}\tlr:{}').format(arglist.scenario, arglist.num_episodes, arglist.batch_size,
-                                                   arglist.save_rate, arglist.lr)
-    print(train_info+'\n')
+                                                 arglist.save_rate, arglist.lr)
+    print(train_info + '\n')
     log.append('-----------------------------------------------------------------------------------------')
     log.append('Starting iterations : {}'.format(get_time()))
     log.append(train_info)
@@ -245,7 +245,7 @@ def train(arglist):
             obs_n = torch.from_numpy(obs_n).to(device)
             episode_step = 1
             episode_rewards.append(0)
-            sys.stdout.write("\repsiode:{}".format(episode_num))
+            sys.stdout.write("\rtrain_step:{},epsiode:{}".format(train_step, episode_num))
             sys.stdout.flush()
             episode_num += 1
             if info_n == {}:
@@ -289,7 +289,7 @@ if __name__ == '__main__':
     if not os.path.exists(arglist.log_dir):
         os.makedirs(arglist.log_dir)
         print("Folder created")
-    for i in range(1):
+    for i in range(3):
         train(arglist)
 
     # loaded_data = []
