@@ -13,9 +13,9 @@ import datetime
 import numpy as np
 from gym import spaces
 from maddpg_pytorch.maddpg_pytorch import MADDPGAgentTrainer, vae_train
-
 from smac.env import StarCraft2Env
 from absl import logging
+from tensorboardX import SummaryWriter
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -26,6 +26,9 @@ def parse_args():
     parser.add_argument("--scenario", type=str, default="3m", help="name of the scenario script")
     parser.add_argument("--max-episode-len", type=int, default=60, help="maximum episode length")
     parser.add_argument("--num-episodes", type=int, default=3000, help="number of episodes")
+    parser.add_argument("--max-train-step", type=int, default=2000000, help="maximum train step")
+    parser.add_argument("--test-step", type=int, default=10000, help="test step")
+    parser.add_argument("--num-test-episodes", type=int, default=100, help="num test eps")
     parser.add_argument("--num-adversaries", type=int, default=0, help="number of adversaries")
     parser.add_argument("--good-policy", type=str, default="maddpg", help="policy for good agents")
     parser.add_argument("--adv-policy", type=str, default="maddpg", help="policy of adversaries")
@@ -151,14 +154,12 @@ def read_from_csv(file_name):
     return data
 
 
-def save_all_data(env, arglist, episode_rewards, final_ep_rewards, log, win_lose, trainers):
-    # 创建路径
-    exp_dir = arglist.log_head + '{}_{}{}/'.format(arglist.exp_index, arglist.scenario, arglist.num_episodes)
+def save_all_data(env, arglist, episode_rewards, final_ep_rewards, log, win_lose, trainers, exp_dir):
     if not os.path.exists(exp_dir):
         os.makedirs(exp_dir)
         print("{} created".format(exp_dir))
     # 保存奖励、胜率对象
-    with open(exp_dir+'episode_rewards.pkl', 'wb') as fp:
+    with open(exp_dir + 'episode_rewards.pkl', 'wb') as fp:
         pickle.dump(episode_rewards, fp)
     with open(exp_dir + 'episode_rewards.pkl', 'wb') as fp:
         pickle.dump(final_ep_rewards, fp)
@@ -200,6 +201,9 @@ def write_to_csv(file_name, data):
 
 
 def train(arglist):
+    # 创建实验保存路径
+    exp_dir = arglist.log_head + '{}_{}{}/'.format(arglist.exp_index, arglist.scenario, arglist.max_train_step)
+    writer = SummaryWriter(exp_dir)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     # Create environment
     env, env_info, act_space_n, obs_space_n, act_space_acc, obs_space_acc, obs_n = make_env(arglist.scenario)
@@ -221,7 +225,7 @@ def train(arglist):
     episode_step = 0
     train_step = 0
     episode1000_start = time.time()
-
+    last_test_step = -1e10
     print('Starting iterations...')
     train_info = ('scenario:{}\tnum-episodes:{}\tbatch-size:{}\tsave-rates:{}\tlr:{}'.format
                   (arglist.scenario, arglist.num_episodes, arglist.batch_size, arglist.save_rate, arglist.lr))
@@ -229,7 +233,6 @@ def train(arglist):
     log.append('-----------------------------------------------------------------------------------------')
     log.append('Starting iterations : {}'.format(get_time()))
     log.append(train_info)
-
     while True:
         action_n = [agent.action(obs) for agent, obs in zip(trainers, obs_n)]
         # 获取环境输出的reward, terminated, info_n，rew_n，new_obs_n，action_n
@@ -277,24 +280,56 @@ def train(arglist):
             for agent in trainers:
                 loss = agent.update(trainers, train_step)
 
-        # 每save_rate(1000)轮保存模型,输出训练信息
-        if terminated and (episode_num % arglist.save_rate == 0):
-            # 输出最近一千轮信息
-            output = "\rsteps: {}, episodes: {}, mean episode reward: {}, won_rate: {} time: {}".format(
-                train_step, episode_num, np.mean(episode_rewards[-arglist.save_rate:]),
-                np.mean(episode_win_lose[-arglist.save_rate:]), round(time.time() - episode1000_start, 3))
-            # 最近一千轮的平均奖励
-            final_ep_rewards.append(np.mean(episode_rewards[-arglist.save_rate:]))
-            print(output)
-            log.append(output)
-            episode1000_start = time.time()
+        if terminated and (train_step - last_test_step > arglist.test_step):
+            last_test_step = train_step
+            eval_is_win_buffer = []
+            eval_reward_buffer = []
+            eval_steps_buffer = []
+            for i in range(arglist.num_test_episodes):
+                eval_reward, eval_step, eval_is_win = run_evaluate_episode(env, trainers)
+                eval_reward_buffer.append(eval_reward)
+                eval_steps_buffer.append(eval_step)
+                eval_is_win_buffer.append(eval_is_win)
+            writer.add_scalar('eval_reward', np.mean(eval_reward_buffer), train_step)
+            writer.add_scalar('eval_steps', np.mean(eval_steps_buffer), train_step)
+            writer.add_scalar('eval_win_rate', np.mean(eval_is_win_buffer), train_step)
+
+            optput = f'\reval_reward:{np.mean(eval_reward_buffer)}eval_steps:{np.mean(eval_steps_buffer)}eval_win_rate:{np.mean(eval_is_win_buffer)}'
+            print(optput)
+            # output = "\rsteps: {}, episodes: {}, mean episode reward: {}, won_rate: {} time: {}".format(
+            #     train_step, episode_num, np.mean(episode_rewards[-arglist.save_rate:]),
+            #     np.mean(episode_win_lose[-arglist.save_rate:]), round(time.time() - episode1000_start, 3))
+            # # 最近一千轮的平均奖励
+            # final_ep_rewards.append(np.mean(episode_rewards[-arglist.save_rate:]))
+            # print(output)
+            # log.append(output)
+            # episode1000_start = time.time()
 
         # 保存信息
-        if episode_num > arglist.num_episodes:
+        if train_step > arglist.max_train_step:
             print('...Finished total of {} episodes.'.format(len(episode_rewards)))
             save_all_data(env=env, arglist=arglist, episode_rewards=episode_rewards, final_ep_rewards=final_ep_rewards,
-                          log=log, win_lose=episode_win_lose, trainers=trainers)
+                          log=log, win_lose=episode_win_lose, trainers=trainers,exp_dir=exp_dir)
             break
+
+
+def run_evaluate_episode(env, trainers):
+    episode_reward = 0.0
+    episode_step = 0
+    terminated = False
+    _ = env.reset()
+    while not terminated:
+        obs_n = env.get_obs()
+        new_obs_n = np.array(obs_n, copy=False)
+        new_obs_n = torch.from_numpy(new_obs_n).to(device)
+        action_n = [agent.action(obs) for agent, obs in zip(trainers, new_obs_n)]
+        action_n_index = act_mask_max(action_n, env)
+        reward, terminated, info_n = env.step(action_n_index)
+        episode_step += 1
+        episode_reward += reward
+
+    is_win = env.win_counted
+    return episode_reward, episode_step, is_win
 
 
 if __name__ == '__main__':
