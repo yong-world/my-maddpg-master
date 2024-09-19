@@ -26,8 +26,9 @@ def parse_args():
     parser.add_argument("--scenario", type=str, default="3m", help="name of the scenario script")
     parser.add_argument("--max-episode-len", type=int, default=60, help="maximum episode length")
     parser.add_argument("--num-episodes", type=int, default=3000, help="number of episodes")
-    parser.add_argument("--max-train-step", type=int, default=2000000, help="maximum train step")
+    parser.add_argument("--max-train-step", type=int, default=3000000, help="maximum train step")
     parser.add_argument("--test-step", type=int, default=10000, help="test step")
+    parser.add_argument("--batch-size", type=int, default=1024, help="number of episodes to optimize at the same time")
     parser.add_argument("--num-test-episodes", type=int, default=100, help="num test eps")
     parser.add_argument("--num-adversaries", type=int, default=0, help="number of adversaries")
     parser.add_argument("--good-policy", type=str, default="maddpg", help="policy for good agents")
@@ -35,7 +36,7 @@ def parse_args():
     # Core training parameters
     parser.add_argument("--lr", type=float, default=1e-2, help="learning rate for Adam optimizer")
     parser.add_argument("--gamma", type=float, default=0.95, help="discount factor")
-    parser.add_argument("--batch-size", type=int, default=128, help="number of episodes to optimize at the same time")
+
     parser.add_argument("--num-units", type=int, default=64, help="number of units in the mlp")
     # Checkpointing
     parser.add_argument("--exp-name", type=str, default="exp1", help="name of the experiment")
@@ -154,6 +155,25 @@ def read_from_csv(file_name):
     return data
 
 
+def run_evaluate_episode(env, trainers):
+    episode_reward = 0.0
+    episode_step = 0
+    terminated = False
+    _ = env.reset()
+    while not terminated:
+        obs_n = env.get_obs()
+        new_obs_n = np.array(obs_n, copy=False)
+        new_obs_n = torch.from_numpy(new_obs_n).to(device)
+        action_n = [agent.action(obs) for agent, obs in zip(trainers, new_obs_n)]
+        action_n_index = act_mask_max(action_n, env)
+        reward, terminated, info_n = env.step(action_n_index)
+        episode_step += 1
+        episode_reward += reward
+
+    is_win = env.win_counted
+    return episode_reward, episode_step, is_win
+
+
 def save_all_data(env, arglist, episode_rewards, final_ep_rewards, log, win_lose, trainers, exp_dir):
     if not os.path.exists(exp_dir):
         os.makedirs(exp_dir)
@@ -169,7 +189,7 @@ def save_all_data(env, arglist, episode_rewards, final_ep_rewards, log, win_lose
     # 绘图并保存
     mean_reward = np.mean(episode_rewards)
     plot_save(data_input=final_ep_rewards,
-              title='1/100TrainStepRewards',
+              title='Rewards',
               x_label='episode',
               y_label='reward', png_dir=exp_dir + 'sample_rewards.png', marker='.')
 
@@ -260,7 +280,7 @@ def train(arglist):
             obs_n = np.array(obs_n)
             obs_n = torch.from_numpy(obs_n).to(device)
             episode_rewards.append(0)
-            sys.stdout.write("\repsiode:{},steps:{},episode_step:{}".format(episode_num, train_step, episode_step))
+            sys.stdout.write("\repisode:{},steps:{},episode_step:{}".format(episode_num, train_step, episode_step))
             sys.stdout.flush()
             episode_num += 1
             episode_step = 0
@@ -281,7 +301,7 @@ def train(arglist):
                 loss = agent.update(trainers, train_step)
 
         if terminated and (train_step - last_test_step > arglist.test_step):
-            last_test_step = train_step
+            last_test_step = train_step-(train_step % arglist.test_step)
             eval_is_win_buffer = []
             eval_reward_buffer = []
             eval_steps_buffer = []
@@ -294,8 +314,9 @@ def train(arglist):
             writer.add_scalar('eval_steps', np.mean(eval_steps_buffer), train_step)
             writer.add_scalar('eval_win_rate', np.mean(eval_is_win_buffer), train_step)
 
-            optput = f'\reval_reward:{np.mean(eval_reward_buffer)}eval_steps:{np.mean(eval_steps_buffer)}eval_win_rate:{np.mean(eval_is_win_buffer)}'
-            print(optput)
+            output = f'\repisode:{episode_num}\ttrain_step:{train_step}\teval_reward:{np.mean(eval_reward_buffer)}\teval_steps:{np.mean(eval_steps_buffer)}\teval_win_rate:{np.mean(eval_is_win_buffer)}'
+            print(output)
+            log.append(output)
             # output = "\rsteps: {}, episodes: {}, mean episode reward: {}, won_rate: {} time: {}".format(
             #     train_step, episode_num, np.mean(episode_rewards[-arglist.save_rate:]),
             #     np.mean(episode_win_lose[-arglist.save_rate:]), round(time.time() - episode1000_start, 3))
@@ -309,27 +330,8 @@ def train(arglist):
         if train_step > arglist.max_train_step:
             print('...Finished total of {} episodes.'.format(len(episode_rewards)))
             save_all_data(env=env, arglist=arglist, episode_rewards=episode_rewards, final_ep_rewards=final_ep_rewards,
-                          log=log, win_lose=episode_win_lose, trainers=trainers,exp_dir=exp_dir)
+                          log=log, win_lose=episode_win_lose, trainers=trainers, exp_dir=exp_dir)
             break
-
-
-def run_evaluate_episode(env, trainers):
-    episode_reward = 0.0
-    episode_step = 0
-    terminated = False
-    _ = env.reset()
-    while not terminated:
-        obs_n = env.get_obs()
-        new_obs_n = np.array(obs_n, copy=False)
-        new_obs_n = torch.from_numpy(new_obs_n).to(device)
-        action_n = [agent.action(obs) for agent, obs in zip(trainers, new_obs_n)]
-        action_n_index = act_mask_max(action_n, env)
-        reward, terminated, info_n = env.step(action_n_index)
-        episode_step += 1
-        episode_reward += reward
-
-    is_win = env.win_counted
-    return episode_reward, episode_step, is_win
 
 
 if __name__ == '__main__':
