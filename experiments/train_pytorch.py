@@ -1,8 +1,14 @@
 from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
-import argparse
 import os, csv
+import sys   #导入sys模块
+script_dir = os.path.dirname(os.path.abspath(__file__))  # 获取脚本所在的目录
+os.chdir(script_dir)  # 将工作目录切换到脚本所在目录
+sys.path.append(os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
+print(sys.path)
+import argparse
+
 import sys
 import time
 import pickle
@@ -39,7 +45,7 @@ def parse_args():
 
     parser.add_argument("--num-units", type=int, default=64, help="number of units in the mlp")
     # Checkpointing
-    parser.add_argument("--exp-name", type=str, default="exp1", help="name of the experiment")
+    parser.add_argument("--exp-name", type=str, default="VaeMiMaddogSmac", help="name of the experiment")
     parser.add_argument("--save-dir", type=str, default="./model_save/TH/", help="directory in which training "
                                                                                  "state and model should be saved")
     parser.add_argument("--save-rate", type=int, default=1000, help="save model once every time this many "
@@ -222,7 +228,7 @@ def write_to_csv(file_name, data):
 
 def train(arglist):
     # 创建实验保存路径
-    exp_dir = arglist.log_head + '{}_{}{}/'.format(arglist.exp_index, arglist.scenario, arglist.max_train_step)
+    exp_dir = arglist.log_head + '{}_{}{}{}/'.format(arglist.exp_index, arglist.scenario, arglist.max_train_step, arglist.exp_name)
     writer = SummaryWriter(exp_dir)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     # Create environment
@@ -247,12 +253,13 @@ def train(arglist):
     episode1000_start = time.time()
     last_test_step = -1e10
     print('Starting iterations...')
-    train_info = ('scenario:{}\tnum-episodes:{}\tbatch-size:{}\tsave-rates:{}\tlr:{}'.format
-                  (arglist.scenario, arglist.num_episodes, arglist.batch_size, arglist.save_rate, arglist.lr))
+    train_info = ('scenario:{}\tnum-episodes:{}\tbatch-size:{}\tsave-rates:{}\tlr:{}\tdevice:{}'.format
+                  (arglist.scenario, arglist.num_episodes, arglist.batch_size, arglist.save_rate, arglist.lr,device))
     print(train_info)
     log.append('-----------------------------------------------------------------------------------------')
     log.append('Starting iterations : {}'.format(get_time()))
     log.append(train_info)
+    train_time=time.time()
     while True:
         action_n = [agent.action(obs) for agent, obs in zip(trainers, obs_n)]
         # 获取环境输出的reward, terminated, info_n，rew_n，new_obs_n，action_n
@@ -280,8 +287,8 @@ def train(arglist):
             obs_n = np.array(obs_n)
             obs_n = torch.from_numpy(obs_n).to(device)
             episode_rewards.append(0)
-            sys.stdout.write("\repisode:{},steps:{},episode_step:{}".format(episode_num, train_step, episode_step))
-            sys.stdout.flush()
+            # sys.stdout.write("\repisode:{},steps:{},episode_step:{}".format(episode_num, train_step, episode_step))
+            # sys.stdout.flush()
             episode_num += 1
             episode_step = 0
             if info_n == {}:
@@ -314,17 +321,10 @@ def train(arglist):
             writer.add_scalar('eval_steps', np.mean(eval_steps_buffer), train_step)
             writer.add_scalar('eval_win_rate', np.mean(eval_is_win_buffer), train_step)
 
-            output = f'\repisode:{episode_num}\ttrain_step:{train_step}\teval_reward:{np.mean(eval_reward_buffer)}\teval_steps:{np.mean(eval_steps_buffer)}\teval_win_rate:{np.mean(eval_is_win_buffer)}'
+            output = f'\repisode:{episode_num}\ttrain_step:{train_step}\teval_reward:{np.mean(eval_reward_buffer)}\teval_steps:{np.mean(eval_steps_buffer)}\teval_win_rate:{np.mean(eval_is_win_buffer)}\ttime:{time.time()-train_time}'
             print(output)
             log.append(output)
-            # output = "\rsteps: {}, episodes: {}, mean episode reward: {}, won_rate: {} time: {}".format(
-            #     train_step, episode_num, np.mean(episode_rewards[-arglist.save_rate:]),
-            #     np.mean(episode_win_lose[-arglist.save_rate:]), round(time.time() - episode1000_start, 3))
-            # # 最近一千轮的平均奖励
-            # final_ep_rewards.append(np.mean(episode_rewards[-arglist.save_rate:]))
-            # print(output)
-            # log.append(output)
-            # episode1000_start = time.time()
+            train_time=time.time()
 
         # 保存信息
         if train_step > arglist.max_train_step:

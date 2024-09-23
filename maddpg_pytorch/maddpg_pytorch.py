@@ -1,3 +1,5 @@
+import sys   #导入sys模块
+sys.path.append("..")
 import numpy
 import numpy as np
 import random
