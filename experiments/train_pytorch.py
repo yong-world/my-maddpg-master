@@ -1,11 +1,24 @@
 from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
-import argparse
 import os, csv
+import sys  # 导入sys模块
+
+import win32con
+import win32gui
+
+script_dir = os.path.dirname(os.path.abspath(__file__))  # 获取脚本所在的目录
+os.chdir(script_dir)  # 将工作目录切换到脚本所在目录
+sys.path.append(os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
+print(sys.path)
+import argparse
+
 import sys
 import time
 import pickle
+# import importlib
+import logging
+import traceback
 import matplotlib.pyplot as plt
 import torch
 import torch.nn as nn
@@ -14,7 +27,6 @@ import numpy as np
 from gym import spaces
 from maddpg_pytorch.maddpg_pytorch import MADDPGAgentTrainer, vae_train
 from smac.env import StarCraft2Env
-from absl import logging
 from tensorboardX import SummaryWriter
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -26,8 +38,9 @@ def parse_args():
     parser.add_argument("--scenario", type=str, default="3m", help="name of the scenario script")
     parser.add_argument("--max-episode-len", type=int, default=60, help="maximum episode length")
     parser.add_argument("--num-episodes", type=int, default=3000, help="number of episodes")
-    parser.add_argument("--max-train-step", type=int, default=2000000, help="maximum train step")
+    parser.add_argument("--max-train-step", type=int, default=3000000, help="maximum train step")
     parser.add_argument("--test-step", type=int, default=10000, help="test step")
+    parser.add_argument("--batch-size", type=int, default=1024, help="number of episodes to optimize at the same time")
     parser.add_argument("--num-test-episodes", type=int, default=100, help="num test eps")
     parser.add_argument("--num-adversaries", type=int, default=0, help="number of adversaries")
     parser.add_argument("--good-policy", type=str, default="maddpg", help="policy for good agents")
@@ -35,10 +48,10 @@ def parse_args():
     # Core training parameters
     parser.add_argument("--lr", type=float, default=1e-2, help="learning rate for Adam optimizer")
     parser.add_argument("--gamma", type=float, default=0.95, help="discount factor")
-    parser.add_argument("--batch-size", type=int, default=128, help="number of episodes to optimize at the same time")
+
     parser.add_argument("--num-units", type=int, default=64, help="number of units in the mlp")
     # Checkpointing
-    parser.add_argument("--exp-name", type=str, default="exp1", help="name of the experiment")
+    parser.add_argument("--exp-name", type=str, default="TMMaddpgSmac", help="name of the experiment")
     parser.add_argument("--save-dir", type=str, default="./model_save/TH/", help="directory in which training "
                                                                                  "state and model should be saved")
     parser.add_argument("--save-rate", type=int, default=1000, help="save model once every time this many "
@@ -73,8 +86,42 @@ def act_mask_max(action_n, env):
     return indices
 
 
+def get_logger():
+    # logging = importlib.import_module('logging')
+    # 创建 Logger 实例
+    train_logging = logging.getLogger("mylogger")
+    # 设置日志级别
+    train_logging.setLevel(logging.DEBUG)
+    train_logging.propagate = False
+
+    # 创建控制台 Handler
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setLevel(logging.DEBUG)
+
+    # 创建文件处理器
+    file_handler = logging.FileHandler(exp_dir + 'experiment.log', mode='a', encoding='utf-8')
+    file_handler.setLevel(logging.INFO)
+
+    # 设置输出格式
+    formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
+    console_handler.setFormatter(formatter)
+    file_handler.setFormatter(formatter)
+
+    # 将 Handler 添加到 Logger
+    train_logging.addHandler(console_handler)
+    train_logging.addHandler(file_handler)
+
+    # 记录日志
+    # train_logging.debug('这是一个调试信息')
+    # train_logging.info('这是一个普通信息')
+    # train_logging.warning('这是一个警告信息')
+    # train_logging.error('这是一个错误信息')
+    # train_logging.critical('这是一个严重错误信息')
+    return train_logging
+
+
 def get_time():
-    return str(datetime.datetime.now().strftime('%m%d_%H%M'))
+    return str(datetime.datetime.now().strftime('%y-%m-%d %H:%M:%S'))
 
 
 def get_trainers(env, n_agent, obs_space_n, act_space_n, arglist, device):
@@ -130,7 +177,7 @@ def plot_save(data_input, title, x_label, y_label, png_dir, marker=None):
     plt.ylabel(y_label)
     plt.grid()
     plt.savefig(png_dir)
-    print("figure saved to:", png_dir)
+    my_logger.debug(f"figure saved to:{png_dir}")
     plt.show()
 
 
@@ -150,14 +197,53 @@ def read_from_csv(file_name):
                     except ValueError:
                         converted_row.append(item)  # 保持原始字符串
             data.append(converted_row)
-    print(f"数据已从 {file_name} 读取")
+    # print(f"数据已从 {file_name} 读取")
     return data
 
 
-def save_all_data(env, arglist, episode_rewards, final_ep_rewards, log, win_lose, trainers, exp_dir):
-    if not os.path.exists(exp_dir):
-        os.makedirs(exp_dir)
-        print("{} created".format(exp_dir))
+def run_evaluate_episode(env, trainers, tbwriter, csv_writer, episode_num, train_step, interval_time):
+    eval_is_win_buffer = []
+    eval_reward_buffer = []
+    eval_steps_buffer = []
+    for i in range(arglist.num_test_episodes):
+        episode_reward = 0.0
+        episode_step = 0
+        terminated = False
+        _ = env.reset()
+        while not terminated:
+            obs_n = env.get_obs()
+            new_obs_n = np.array(obs_n, copy=False)
+            new_obs_n = torch.from_numpy(new_obs_n).to(device)
+            action_n = [agent.action(obs) for agent, obs in zip(trainers, new_obs_n)]
+            action_n_index = act_mask_max(action_n, env)
+            reward, terminated, info_n = env.step(action_n_index)
+            episode_step += 1
+            episode_reward += reward
+
+        is_win = env.win_counted
+        eval_reward_buffer.append(episode_reward)
+        eval_steps_buffer.append(episode_step)
+        eval_is_win_buffer.append(is_win)
+
+    tbwriter.add_scalar('eval_win_rate', np.mean(eval_is_win_buffer), train_step)
+    tbwriter.add_scalar('eval_reward', np.mean(eval_reward_buffer), train_step)
+    tbwriter.add_scalar('eval_steps', np.mean(eval_steps_buffer), train_step)
+    output = (f'episode:{episode_num:<8}\ttrain_step:{train_step:<8}\t\tmean_step:{np.mean(eval_steps_buffer):<8.0f}'
+              f'\ttime:{interval_time:<8.0f}reward:'
+              f'{np.mean(eval_reward_buffer):<8.2f}\twin_rate:{np.mean(eval_is_win_buffer):<8.2f}')
+    my_logger.info(output)
+    csv_writer.writerow({
+        "episode": f'{episode_num:}',
+        "train_step": f'{train_step:}',
+        "time": f'{interval_time:.0f}',
+        "mean_step": f'{np.mean(eval_steps_buffer):.0f}',
+        "reward": f'{np.mean(eval_reward_buffer):.2f}',
+        "win_rate": f'{np.mean(eval_is_win_buffer):.2f}',
+    })
+    return
+
+
+def save_all_data(env, arglist, episode_rewards, final_ep_rewards, win_lose, trainers, exp_dir):
     # 保存奖励、胜率对象
     with open(exp_dir + 'episode_rewards.pkl', 'wb') as fp:
         pickle.dump(episode_rewards, fp)
@@ -165,23 +251,13 @@ def save_all_data(env, arglist, episode_rewards, final_ep_rewards, log, win_lose
         pickle.dump(final_ep_rewards, fp)
     with open(exp_dir + 'episode_rewards.pkl', 'wb') as fp:
         pickle.dump(win_lose, fp)
-
     # 绘图并保存
     mean_reward = np.mean(episode_rewards)
-    plot_save(data_input=final_ep_rewards,
-              title='1/100TrainStepRewards',
-              x_label='episode',
-              y_label='reward', png_dir=exp_dir + 'sample_rewards.png', marker='.')
+    # plot_save(data_input=final_ep_rewards,
+    #           title='Rewards',
+    #           x_label='episode',
+    #           y_label='reward', png_dir=exp_dir + 'sample_rewards.png', marker='.')
 
-    # 保存训练记录
-    log.append('Rewards:{}\t')
-    log.append('End iterations')
-    with open(exp_dir + 'train_log.txt', 'w+') as fp:
-        for log_line in log:
-            fp.write(str(log_line) + '\n')
-    with open(exp_dir + 'episode_reward.txt', 'w+') as fp:
-        for episode_reward in episode_rewards:
-            fp.write(str(episode_reward) + '\n')
     # 保存模型
     save_path = exp_dir + "pytorch_model.pt"
     torch.save({'trainers': [[trainers[i].p, trainers[i].target_p, trainers[i].q, trainers[i].target_q, trainers[i].vae]
@@ -192,31 +268,53 @@ def save_all_data(env, arglist, episode_rewards, final_ep_rewards, log, win_lose
     write_to_csv('Variable_Parameter.csv', arglist.Variable_Parameter)
 
 
+class StdToLog:
+    def __init__(self, file, std):
+        self.file = file  # 打开文件用于写入
+        self.std = std  # 保存原始 stdout
+
+    def write(self, message):
+        self.file.write(message)  # 写入文件
+        self.std.write(message)  # 同时输出到控制台
+        self.file.flush()
+
+    def flush(self):
+        self.file.flush()  # 刷新文件
+        self.std.flush()  # 刷新控制台输出
+
+    def close(self):
+        self.file.close()  # 手动关闭文件
+
+    def __enter__(self):
+        return self  # 返回当前实例供 with 语句使用
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        self.close()  # 在退出时关闭文件
+
+
 def write_to_csv(file_name, data):
     # data应为列表，每个元素都是一个参数或参数列表（每行的数据）
     with open(file_name, mode='w', newline='', encoding='utf-8') as file:
         writer = csv.writer(file)
         writer.writerows(data)
-    print(f"数据已写入 {file_name}")
+    my_logger.debug(f"数据已写入 {file_name}")
 
 
-def train(arglist):
+def train():
     # 创建实验保存路径
-    exp_dir = arglist.log_head + '{}_{}{}/'.format(arglist.exp_index, arglist.scenario, arglist.max_train_step)
-    writer = SummaryWriter(exp_dir)
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    fieldnames = ["episode", "train_step", "mean_step", "time", "reward", "win_rate"]
+    csv_writer = csv.DictWriter(csv_log_file, fieldnames=fieldnames)
+    csv_writer.writeheader()
+    tbwriter = SummaryWriter(exp_dir)
     # Create environment
     env, env_info, act_space_n, obs_space_n, act_space_acc, obs_space_acc, obs_n = make_env(arglist.scenario)
     # Create agent trainers
     trainers = get_trainers(env, env_info['n_agents'], obs_space_n, act_space_n, arglist, device)
-    print('Using good policy {} and adv policy {}'.format(arglist.good_policy, arglist.adv_policy))
-    num_adversaries = arglist.num_adversaries
     # Load previous results, if necessary
     if arglist.load_dir == "":
         arglist.load_dir = arglist.save_dir
     if arglist.display or arglist.restore or arglist.benchmark:  # 用torch加载模型
-        print('Loading previous state')
-    log = []
+        my_logger.debug('Loading previous state')
     episode_rewards = [0.0]
     episode_num = 0
     episode_win_lose = []
@@ -226,13 +324,14 @@ def train(arglist):
     train_step = 0
     episode1000_start = time.time()
     last_test_step = -1e10
-    print('Starting iterations...')
-    train_info = ('scenario:{}\tnum-episodes:{}\tbatch-size:{}\tsave-rates:{}\tlr:{}'.format
-                  (arglist.scenario, arglist.num_episodes, arglist.batch_size, arglist.save_rate, arglist.lr))
-    print(train_info)
-    log.append('-----------------------------------------------------------------------------------------')
-    log.append('Starting iterations : {}'.format(get_time()))
-    log.append(train_info)
+    my_logger.info('--------------------------------------------------------'
+                   '---------------------------------------------------------------')
+    my_logger.info(f'Starting iterations : {get_time()}')
+    train_setting = ('exp_name:{}\tscenario:{}\tnum-episodes:{}\tbatch-size:{}\tsave-rates:{}\tlr:{}\tdevice:{}'.format
+                     (arglist.exp_name, arglist.scenario, arglist.max_train_step, arglist.batch_size, arglist.save_rate,
+                      arglist.lr, device))
+    my_logger.info(train_setting)
+    train_time = time.time()
     while True:
         action_n = [agent.action(obs) for agent, obs in zip(trainers, obs_n)]
         # 获取环境输出的reward, terminated, info_n，rew_n，new_obs_n，action_n
@@ -260,8 +359,8 @@ def train(arglist):
             obs_n = np.array(obs_n)
             obs_n = torch.from_numpy(obs_n).to(device)
             episode_rewards.append(0)
-            sys.stdout.write("\repsiode:{},steps:{},episode_step:{}".format(episode_num, train_step, episode_step))
-            sys.stdout.flush()
+            # sys.stdout.write("\repisode:{},steps:{},episode_step:{}".format(episode_num, train_step, episode_step))
+            # sys.stdout.flush()
             episode_num += 1
             episode_step = 0
             if info_n == {}:
@@ -281,55 +380,16 @@ def train(arglist):
                 loss = agent.update(trainers, train_step)
 
         if terminated and (train_step - last_test_step > arglist.test_step):
-            last_test_step = train_step
-            eval_is_win_buffer = []
-            eval_reward_buffer = []
-            eval_steps_buffer = []
-            for i in range(arglist.num_test_episodes):
-                eval_reward, eval_step, eval_is_win = run_evaluate_episode(env, trainers)
-                eval_reward_buffer.append(eval_reward)
-                eval_steps_buffer.append(eval_step)
-                eval_is_win_buffer.append(eval_is_win)
-            writer.add_scalar('eval_reward', np.mean(eval_reward_buffer), train_step)
-            writer.add_scalar('eval_steps', np.mean(eval_steps_buffer), train_step)
-            writer.add_scalar('eval_win_rate', np.mean(eval_is_win_buffer), train_step)
-
-            optput = f'\reval_reward:{np.mean(eval_reward_buffer)}eval_steps:{np.mean(eval_steps_buffer)}eval_win_rate:{np.mean(eval_is_win_buffer)}'
-            print(optput)
-            # output = "\rsteps: {}, episodes: {}, mean episode reward: {}, won_rate: {} time: {}".format(
-            #     train_step, episode_num, np.mean(episode_rewards[-arglist.save_rate:]),
-            #     np.mean(episode_win_lose[-arglist.save_rate:]), round(time.time() - episode1000_start, 3))
-            # # 最近一千轮的平均奖励
-            # final_ep_rewards.append(np.mean(episode_rewards[-arglist.save_rate:]))
-            # print(output)
-            # log.append(output)
-            # episode1000_start = time.time()
-
+            last_test_step = train_step - (train_step % arglist.test_step)
+            run_evaluate_episode(env=env, trainers=trainers, tbwriter=tbwriter, csv_writer=csv_writer,
+                                 episode_num=episode_num, train_step=train_step, interval_time=time.time() - train_time)
+            train_time = time.time()
         # 保存信息
         if train_step > arglist.max_train_step:
-            print('...Finished total of {} episodes.'.format(len(episode_rewards)))
+            my_logger.info(f'Finished total of {len(episode_rewards)} episodes at {get_time()}')
             save_all_data(env=env, arglist=arglist, episode_rewards=episode_rewards, final_ep_rewards=final_ep_rewards,
-                          log=log, win_lose=episode_win_lose, trainers=trainers,exp_dir=exp_dir)
+                          win_lose=episode_win_lose, trainers=trainers, exp_dir=exp_dir)
             break
-
-
-def run_evaluate_episode(env, trainers):
-    episode_reward = 0.0
-    episode_step = 0
-    terminated = False
-    _ = env.reset()
-    while not terminated:
-        obs_n = env.get_obs()
-        new_obs_n = np.array(obs_n, copy=False)
-        new_obs_n = torch.from_numpy(new_obs_n).to(device)
-        action_n = [agent.action(obs) for agent, obs in zip(trainers, new_obs_n)]
-        action_n_index = act_mask_max(action_n, env)
-        reward, terminated, info_n = env.step(action_n_index)
-        episode_step += 1
-        episode_reward += reward
-
-    is_win = env.win_counted
-    return episode_reward, episode_step, is_win
 
 
 if __name__ == '__main__':
@@ -338,5 +398,28 @@ if __name__ == '__main__':
     setattr(arglist, 'Variable_Parameter', data)
     for para in data[1:]:
         setattr(arglist, para[0], para[1])
-    for i in range(1):
-        train(arglist)
+    exp_dir = arglist.log_head + '{}_{}{}{}/'.format(arglist.exp_index, arglist.scenario, arglist.max_train_step,
+                                                     arglist.exp_name)
+    os.makedirs(exp_dir, exist_ok=True)
+    with open(exp_dir + "train.log", 'a', encoding='utf-8', buffering=1) as std_log:
+        # 控制台输出的信息和错误保存到std.log文件
+        std_out_log = StdToLog(std_log, sys.stdout)
+        std_err_to_log = StdToLog(std_log, sys.stderr)
+        sys.stdout = std_out_log
+        sys.stderr = std_err_to_log
+
+        for i in range(1):
+            arglist = parse_args()
+            data = read_from_csv('Variable_Parameter.csv')
+            setattr(arglist, 'Variable_Parameter', data)
+            for para in data[1:]:
+                setattr(arglist, para[0], para[1])
+            setattr(arglist, "exp_dir", exp_dir)
+
+            exp_dir = arglist.log_head + '{}_{}{}{}/'.format(arglist.exp_index, arglist.scenario,
+                                                             arglist.max_train_step, arglist.exp_name)
+            os.makedirs(exp_dir, exist_ok=True)
+            my_logger = get_logger()
+
+            with open(arglist.exp_dir + "csv_log.csv", mode="w", newline="", buffering=1) as csv_log_file:
+                train()

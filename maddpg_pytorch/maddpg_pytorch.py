@@ -1,3 +1,5 @@
+import sys   #导入sys模块
+sys.path.append("..")
 import numpy
 import numpy as np
 import random
@@ -47,9 +49,6 @@ class MADDPGAgentTrainer(AgentTrainer):
             act_space_n=act_space_n, obs_ph_n=obs_ph_n, agent_index=agent_index,
             lr=args.lr, teammate_num=team_num, num_units=args.num_units, latent_dim=10)
 
-        self.info_fus, self.info_fus_optimizer, self.var_dist, self.var_dist_optimizer = self.init_info_fus(
-            act_space_n=act_space_n, obs_ph_n=obs_ph_n, agent_index=agent_index,
-            lr=args.lr, latent_dim=10)
         # 初始化模型和优化器
         self.p, self.p_optimizer, self.target_p, self.act_pdtype, self.act_pd = self.init_p_model_optimizer(
             act_space_n=act_space_n,
@@ -147,8 +146,7 @@ class MADDPGAgentTrainer(AgentTrainer):
         # act_input需要将当前策略根据观察选择的动作的采样放进去，目前梯度裁剪没啥问题
         # 根据智能体当前观察获取当前的动作输出分布采样
         z = self.vae.encode_to_z(obs_n[self.agent_index])
-        z2, mu, log_var = self.info_fus(obs_n[self.agent_index], z)
-        obs_z2 = torch.cat([obs_n[self.agent_index], z2], -1)
+        obs_z2 = torch.cat([obs_n[self.agent_index], z], -1)
 
         act_output = self.p(obs_z2)
         act_output_sample = self.act_pd.sample(act_output)
@@ -158,38 +156,24 @@ class MADDPGAgentTrainer(AgentTrainer):
         q_output = self.q(batch_input)
         q_value_list = q_output.tolist()
         q_value_var = torch.Tensor(q_value_list).to(self.device)
-        var_mu, var_log_var = self.var_dist(obs_n[self.agent_index], z, q_value_var)
-        kloss=kl_loss(mu1=mu, logvar1=log_var, mu2=var_mu, logvar2=var_log_var)
-
         q_loss = -torch.mean(q_output)
         p_reg = torch.mean(torch.square(act_output))
-        loss = q_loss + p_reg * 1e-3 + kloss
+        loss = q_loss + p_reg * 1e-3
 
         # print('ptrainqloss:{}\tp_reg:{}'.format(q_loss, p_reg))
         self.p_optimizer.zero_grad()
-        self.info_fus_optimizer.zero_grad()
-        self.var_dist_optimizer.zero_grad()
 
         loss.backward()
         if grad_norm_clipping is not None:
             for parameter in list(self.p.parameters()):
                 torch.nn.utils.clip_grad_norm_(parameter, grad_norm_clipping)
         self.p_optimizer.step()
-        if grad_norm_clipping is not None:
-            for parameter in list(self.info_fus.parameters()):
-                torch.nn.utils.clip_grad_norm_(parameter, grad_norm_clipping)
-        self.info_fus_optimizer.step()
-        if grad_norm_clipping is not None:
-            for parameter in list(self.var_dist.parameters()):
-                torch.nn.utils.clip_grad_norm_(parameter, grad_norm_clipping)
-        self.var_dist_optimizer.step()
         return loss
 
     def action(self, obs):
         # 输入观察输出动作分布的采样
         z = self.vae.encode_to_z(obs)
-        z2, mu, log_var = self.info_fus(obs, z)
-        obs_z2 = torch.cat([obs, z2], -1)
+        obs_z2 = torch.cat([obs, z], -1)
         flat = self.p(obs_z2)
         return self.act_pd.sample(flat).detach()
 
@@ -219,9 +203,7 @@ class MADDPGAgentTrainer(AgentTrainer):
         target_act_next_n = []
         for i in range(self.n):
             z = agents[i].vae.encode_to_z(obs_next_n[i])
-            z2, mu, log_var = self.info_fus(obs_next_n[i], z)
-            obs_next_z2 = torch.cat([obs_next_n[i], z2], -1)
-
+            obs_next_z2 = torch.cat([obs_next_n[i], z], -1)
             flat = agents[i].p_debug(obs_next_z2, target_p_values=True)
             target_act_next_n.append(agents[i].act_pd.sample(flat))
         target_q_next = self.q_debug(obs_next_n, target_act_next_n, target_q_values=True).detach()
